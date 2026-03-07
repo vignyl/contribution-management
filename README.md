@@ -1,16 +1,99 @@
-# React + Vite
+Application de gestion financière complète pour associations, avec focus sur la gestion des cotisations, fonds de roulement et prêts entre membres.
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+![Dashboard Preview](docs/screenshot-dashboard.png)
 
-Currently, two official plugins are available:
+## 📋 Table des matières
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- [Fonctionnalités](#-fonctionnalités)
+- [Architecture financière](#-architecture-financière)
+- [Installation](#-installation)
+- [Configuration](#-configuration)
+- [Utilisation](#-utilisation)
+- [API Documentation](#-api-documentation)
+- [Contributing](#-contributing)
 
-## React Compiler
+## ✨ Fonctionnalités
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Gestion des Membres
+- Inscription et profils membres
+- Suivi des présences aux réunions
+- Historique des cotisations
+- Statut de contributeur au fonds de roulement
 
-## Expanding the ESLint configuration
+### Cotisations
+- Cotisation mensuelle minimale : **15 000 F CFA**
+- Frais de présence : **1 000 F CFA**
+- Contribution fonds de roulement : **5 000 F CFA**
+- **Total mensuel : 21 000 F CFA**
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+| Membre | Cotisation | Présence | Fonds roulement | Total |
+|--------|-----------|----------|-----------------|-------|
+| Standard | 15 000 | 1 000 | 5 000 | **21 000** |
+| Patrice & Sandrine | - | 1 000 | - | **1 000** |
+| Wilfried | - | 1 000 | 5 000 | **6 000** |
+
+### Fonds de Roulement
+- Capital initial : **80 000 F CFA**
+- Prêts internes aux membres à jour
+- Taux d'intérêt : **10% sur 3 mois**
+  - 2% pour l'association (AFAY)
+  - 8% répartis proportionnellement aux contributeurs
+
+### Système de Prêts
+
+**Conditions d'éligibilité**
+- ✅ Être à jour des cotisations
+- ✅ Faire partie des contributeurs au fonds de roulement
+
+**Sanctions en cas de défaut**
+
+| Infraction | Pénalité |
+|-----------|----------|
+| "Bouffer" le fonds (non-remboursement) | 50% amende + remboursement intégral avant prochaine cotisation |
+| Retard sans consommation | 5 000 F CFA |
+| Réception annoncée < 7 jours | 1 000 F CFA |
+
+**Quorum pour réception**
+- Minimum 5 présents (Douala & Yaoundé)
+- Débat autorisé pour les autres villes
+
+## 🏗 Architecture financière
+┌─────────────────────────────────────────┐
+│           FONDS DE ROULEMENT            │
+│              80 000 F CFA               │
+├─────────────────────────────────────────┤
+│  Prêt interne (taux 10% / 3 mois)      │
+│  ├── 2% → AFAY (association)           │
+│  └── 8% → Répartition contributeurs    │
+│       (selon part dans le fonds)       │
+└─────────────────────────────────────────┘
+
+
+
+## 🚀 Installation
+
+### Prérequis
+- Node.js ≥ 18
+- PostgreSQL ≥ 14
+- npm ou yarn
+
+### Backend
+
+```bash
+# Cloner le repository
+git clone https://github.com/votre-org/afay-gestion.git
+cd afay-gestion/server
+
+# Installer les dépendances
+npm install
+
+# Configuration environnement
+cp .env.example .env
+# Éditer .env avec vos credentials DB
+
+# Base de données
+npx prisma migrate dev
+npx prisma db seed
+
+# Lancer le serveur
+npm run dev

@@ -97,3 +97,5 @@ npx prisma db seed
 
 # Lancer le serveur
 npm run dev
+
+![alt text](image.png)

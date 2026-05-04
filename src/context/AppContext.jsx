@@ -82,8 +82,8 @@ export const AppProvider = ({ children }) => {
   const totFR    = useMemo(() => members.reduce((s,m) => s+m.fondsRoulement, 0), [members]);
   const totFC    = useMemo(() => members.reduce((s,m) => s+m.fondsCaisse, 0), [members]);
   const actLoans = useMemo(() => loans.filter(l => l.status==="actif"), [loans]);
-  const totDette = useMemo(() => actLoans.reduce((s,l) => s+l.montantDu, 0), [actLoans]);
-  const totGains = useMemo(() => loans.filter(l=>l.status==="rembourse").reduce((s,l)=>s+l.interets,0), [loans]);
+  const totDette = useMemo(() => actLoans.reduce((s,l) => s + calcMontantActuel(l, tod()).montantDu, 0), [actLoans]);
+  const totGains = useMemo(() => loans.filter(l=>l.status==="rembourse").reduce((s,l)=>s+(l.interetsRembourse || l.interets),0), [loans]);
 
   const membersX = useMemo(() => members.map(m => ({
     ...m,
@@ -460,6 +460,73 @@ export const AppProvider = ({ children }) => {
     doPrint(`Fiche — ${mb.name}`, `<table><tbody><tr><td><strong>Nom</strong></td><td>${mb.name}</td><td><strong>Ville</strong></td><td>${mb.ville||"—"}</td></tr><tr><td><strong>Téléphone</strong></td><td>${mb.telephone||"—"}</td><td><strong>Part prorata</strong></td><td>${mX.prorata?.toFixed(2)||"0.00"}%</td></tr><tr><td><strong>Fonds Caisse</strong></td><td>${fmt(mb.fondsCaisse)}</td><td><strong>Fonds Roulement</strong></td><td>${fmt(mb.fondsRoulement)}</td></tr></tbody></table><h2>Fonds de Caisse — ${cots.filter(c=>c.type==="caisse"&&!c.auto).length} versements — Total : ${fmt(totC)}</h2><table><thead><tr><th>Date</th><th>Heure</th><th>Montant</th></tr></thead><tbody>${cots.filter(c=>c.type==="caisse"&&!c.auto).map(c=>`<tr><td>${c.date}</td><td>${c.heure||"—"}</td><td>${fmt(c.montant)}</td></tr>`).join("")||'<tr><td colspan="3" style="color:#999">Aucun</td></tr>'}</tbody></table><h2>Fonds de Roulement — ${cots.filter(c=>c.type==="roulement"&&!c.auto).length} versements — Total : ${fmt(totR)}</h2><table><thead><tr><th>Date</th><th>Heure</th><th>Montant</th></tr></thead><tbody>${cots.filter(c=>c.type==="roulement"&&!c.auto).map(c=>`<tr><td>${c.date}</td><td>${c.heure||"—"}</td><td>${fmt(c.montant)}</td></tr>`).join("")||'<tr><td colspan="3" style="color:#999">Aucun</td></tr>'}</tbody></table><h2>Prêts — ${lns.length} au total</h2><table><thead><tr><th>Date</th><th>Montant</th><th>Total Dû</th><th>Échéance</th><th>Statut</th></tr></thead><tbody>${lns.map(l=>`<tr><td>${l.date}</td><td>${fmt(l.montant)}</td><td>${fmt(l.montantDu)}</td><td>${l.echeance}</td><td>${l.status==="actif"?'<span class="wa">En cours</span>':`<span class="ok">Remboursé ${l.dateRembours||""}</span>`}</td></tr>`).join("")||'<tr><td colspan="5" style="color:#999">Aucun</td></tr>'}</tbody></table>`);
   };
 
+  /* ── Impression rapport individuel de TOUS les membres ────────────────── */
+  const prtAllRapports = () => {
+    const cols = ["Date","Fond de Caisse","Fond de Roulement","Sorties (Pr\u00eat)","Entr\u00e9es (Pr\u00eat)","Gains (Pr\u00eat)","Sanctions"];
+    const thead = `<tr>${cols.map(h=>`<th>${h}</th>`).join('')}</tr>`;
+
+    const calcInteretGagne = (creditCot, mbId) => {
+      const loan = loans.find(l => l.id === creditCot.loanId);
+      if (!loan) return 0;
+      const contrib = (loan.contributions||[]).find(x => x.memberId===mbId);
+      return Math.max(0, creditCot.montant - (contrib?.montantContrib || 0));
+    };
+    const getEmpr = (loan) => loan ? (members.find(m => m.id===loan.emprunteurId)?.name || "?") : "?";
+    const getMbPct = (loan, mbId) => {
+      const c = (loan?.contributions||[]).find(x => x.memberId===mbId);
+      return c ? (c.pct*100).toFixed(1)+"%" : "\u2014";
+    };
+    const getPeriod = (loan, date) => {
+      if (!loan) return 1;
+      return calcMontantActuel(loan, date).periods;
+    };
+
+    const sections = members.map((mb, mIdx) => {
+      const cots = cotisations.filter(c => c.memberId===mb.id);
+      const cotisC = cots.filter(c => c.type==="caisse" && !c.auto);
+      const cotisR = cots.filter(c => c.type==="roulement" && !c.auto);
+      const autoD  = cots.filter(c => c.auto && c.direction==="debit");
+      const autoC  = cots.filter(c => c.auto && c.direction==="credit");
+      const mbSanctions = sanctions.filter(s => s.memberId===mb.id);
+
+      const allDates = [...new Set([
+        ...cotisC.map(c=>c.date), ...cotisR.map(c=>c.date),
+        ...autoD.map(c=>c.date), ...autoC.map(c=>c.date),
+        ...mbSanctions.map(s=>s.date),
+      ])].sort((a,b)=>new Date(a)-new Date(b));
+
+      const totEC = cotisC.reduce((s,c)=>s+c.montant,0);
+      const totER = cotisR.reduce((s,c)=>s+c.montant,0);
+      const totSP = autoD.reduce((s,c)=>s+c.montant,0);
+      const totRB = autoC.reduce((s,c)=>s+c.montant,0);
+      const totIG = autoC.reduce((s,c)=>s+calcInteretGagne(c, mb.id),0);
+      const totE  = totEC + totER + totIG;
+      const totSN = mbSanctions.reduce((s,x)=>s+x.montant,0);
+      const totS  = totSP + totSN;
+
+      const tbody = allDates.map(date => {
+        const cJ = cotisC.filter(c=>c.date===date).reduce((s,c)=>s+c.montant,0);
+        const rJ = cotisR.filter(c=>c.date===date).reduce((s,c)=>s+c.montant,0);
+        const dJ = autoD.filter(c=>c.date===date);
+        const crJ= autoC.filter(c=>c.date===date);
+        const sJ = mbSanctions.filter(s=>s.date===date);
+        const fC = (v) => v>0 ? fmt(v) : '\u2014';
+        const pretD = dJ.map(c=>{ const l=loans.find(x=>x.id===c.loanId); return `<small>${getEmpr(l)} \u2014 ${fmt(l?.montant||0)} \u2014 ${getMbPct(l,mb.id)}</small><br/><strong>${fmt(c.montant)}</strong>`; }).join('<br/>') || '\u2014';
+        const entD  = crJ.map(c=>{ const l=loans.find(x=>x.id===c.loanId); return `<small>${getEmpr(l)} \u2014 ${fmt(l?.montantDu||0)} \u2014 P\u00e9r. ${getPeriod(l,date)}</small><br/><strong>${fmt(c.montant)}</strong>`; }).join('<br/>') || '\u2014';
+        const gainD = crJ.map(c=>{ const l=loans.find(x=>x.id===c.loanId); const g=calcInteretGagne(c,mb.id); return g>0?`<small>${getEmpr(l)} \u2014 P\u00e9r. ${getPeriod(l,date)}</small><br/><strong style="color:#f5a623">${fmt(g)}</strong>`:''; }).filter(Boolean).join('<br/>') || '\u2014';
+        const sanctD= sJ.map(s=>`${fmt(s.montant)} <span class="${s.status==="payee"?"ok":"wa"}">${s.status==="payee"?"Pay\u00e9e":"En attente"}</span>`).join('<br/>') || '\u2014';
+        return `<tr><td>${date}</td><td>${fC(cJ)}</td><td>${fC(rJ)}</td><td>${pretD}</td><td>${entD}</td><td>${gainD}</td><td>${sanctD}</td></tr>`;
+      }).join('');
+
+      const totRow = `<tr style="font-weight:800;background:#f2f2f8"><td>Totaux</td><td>${fmt(totEC)}</td><td>${fmt(totER)}</td><td>${fmt(totSP)}</td><td>${fmt(totRB)}</td><td>${fmt(totIG)}</td><td>${fmt(totSN)}</td></tr>`;
+      const summary = `<p style="margin-top:8px;font-size:12px"><strong>Entr\u00e9es :</strong> ${fmt(totE)} (Caisse: ${fmt(totEC)} \u00b7 Roulement: ${fmt(totER)} \u00b7 Gains: ${fmt(totIG)}) &nbsp;|&nbsp; <strong>Sorties :</strong> ${fmt(totS)} (Pr\u00eats: ${fmt(totSP)} \u00b7 Sanctions: ${fmt(totSN)})</p>`;
+
+      return `${mIdx>0?'<div style="page-break-before:always"></div>':''}<h2>${mb.name}${mb.telephone ? ` \u2014 ${mb.telephone}` : ''}</h2><table><thead>${thead}</thead><tbody>${tbody}${totRow}</tbody></table>${summary}`;
+    }).join('');
+
+    doPrint('Rapports Individuels — Tous les membres', sections);
+  };
+
   const setAppTab = (newTab) => setTab(newTab);
   
   const value = {
@@ -480,7 +547,7 @@ export const AppProvider = ({ children }) => {
     doAddSanction, doEditSanction, doDeleteSanction, doPaySanction,
     doAddSortie, doDeleteSortie,
     doClearData, doExport, onFileChange, importData, setImportData, importConf, importStep, setImportStep, doImportReplace, doImportMerge,
-    prtMember
+    prtMember, prtAllRapports
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

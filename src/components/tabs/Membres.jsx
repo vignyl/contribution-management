@@ -4,11 +4,11 @@ import { FilterBar, SHdr, Card, TH, TD, Badge, Btn } from "../ui";
 import { C, fmt } from "../../utils";
 
 export const Membres = () => {
-  const { fMbr, setFMbr, membersX, filteredMembers, openM, doDeleteMember } = useApp();
+  const { fMbr, setFMbr, membersX, filteredMembers, openM, doDeleteMember, prtAllRapports } = useApp();
 
   return (
     <div>
-      <SHdr title="👥 Gestion des Membres" onAdd={() => openM("addMember")} addLabel="+ Nouveau Membre"/>
+      <SHdr title="👥 Gestion des Membres" printFn={prtAllRapports} onAdd={() => openM("addMember")} addLabel="+ Nouveau Membre"/>
       <FilterBar value={fMbr} onChange={setFMbr} options={[
         {value:"tous",     label:`Tous (${membersX.length})`},
         {value:"ajour",    label:`✓ À jour (${membersX.filter(m=>m.aJour).length})`},

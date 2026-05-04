@@ -1,14 +1,15 @@
-import React from "react";
+import React, { useState } from "react";
 import { useApp } from "../context/AppContext";
 import { Btn, Badge, TH, TD, SectionLabel } from "./ui";
-import { C, INP, LBL, FR, fmt, tod, add3M, calcMontantActuel } from "../utils";
+import { C, INP, LBL, FR, fmt, tod, add3M, calcMontantActuel, doPrint, nowLbl } from "../utils";
 
 export const Modals = () => {
   const {
     modal, closeM, form, sf, members, membersX, cotisations, loans,
     doChangeCredentials, doAddMember, doEditMember, doAddCotisation, doEditCotisation,
     doAddLoan, doEditLoan, doRepay, doAddSanction, doEditSanction, doAddSortie,
-    doDeleteCotisation, doDeleteLoan, openSub, closeAll, totFC, fondsAsso, prtMember
+    doDeleteCotisation, doDeleteLoan, openSub, closeAll, totFC, fondsAsso, prtMember,
+    sanctions, sorties,
   } = useApp();
 
   if (!modal) return null;
@@ -137,6 +138,7 @@ export const Modals = () => {
         {modal.type==="repayLoan" && (() => {
           const loan = loans.find(l => `${l.id}`===`${form.loanId}`);
           const empr = loan ? members.find(m => m.id===loan.emprunteurId) : null;
+          const repDate = form.repayDate || tod();
           const actual = loan ? calcMontantActuel(loan, repDate) : null;
           return loan && actual ? (
             <div>
@@ -220,99 +222,443 @@ export const Modals = () => {
         )}
 
         {/* ── Détail Membre ── */}
-        {modal.type==="memberDetail" && detailMb && (
-          <div>
-            <div style={{ padding:"18px 24px", borderBottom:`1px solid ${C.border}`, display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+        {modal.type==="memberDetail" && detailMb && (() => {
+          /* Données pour le rapport individuel */
+          const detailSanctions  = detailMbId ? sanctions.filter(s => s.memberId===detailMbId) : [];
+          /* Cotisations AUTO du membre : debit = contribution à un prêt, credit = retour d'un remboursement */
+          const autoDebits  = detailCotis.filter(c => c.auto && c.direction==="debit");
+          const autoCredits = detailCotis.filter(c => c.auto && c.direction==="credit");
+
+          /* Dates uniques : cotis manuelles + auto debits/credits + sanctions */
+          const allDates = [...new Set([
+            ...detailCotis.filter(c=>!c.auto).map(c=>c.date),
+            ...autoDebits.map(c=>c.date),
+            ...autoCredits.map(c=>c.date),
+            ...detailSanctions.map(s=>s.date),
+          ])].sort((a,b)=>new Date(a)-new Date(b));
+
+          /* Calcul intérêts gagnés par le membre sur chaque crédit auto */
+          const calcInteretGagne = (creditCot) => {
+            const loan = loans.find(l => l.id === creditCot.loanId);
+            if (!loan) return 0;
+            const contrib = (loan.contributions||[]).find(x => x.memberId===detailMbId);
+            const origContrib = contrib?.montantContrib || 0;
+            return Math.max(0, creditCot.montant - origContrib);
+          };
+
+          /* Totaux globaux rapport */
+          const totEntreesCaisse    = detailCotisC.reduce((s,c)=>s+c.montant, 0);
+          const totEntreesRoulement = detailCotisR.reduce((s,c)=>s+c.montant, 0);
+          const totSortiesPrets     = autoDebits.reduce((s,c)=>s+c.montant, 0);
+          const totRembours         = autoCredits.reduce((s,c)=>s+c.montant, 0);
+          const totInterets         = autoCredits.reduce((s,c)=>s+calcInteretGagne(c), 0);
+          const totEntrees          = totEntreesCaisse + totEntreesRoulement + totInterets;
+          const totSanctions        = detailSanctions.reduce((s,x)=>s+x.montant, 0);
+          const totSorties          = totSortiesPrets + totSanctions;
+
+          return (
+          <MemberDetailTabs
+            detailMb={detailMb}
+            detailCotis={detailCotis}
+            detailCotisC={detailCotisC}
+            detailCotisR={detailCotisR}
+            detailLoans={detailLoans}
+            detailSanctions={detailSanctions}
+            autoDebits={autoDebits}
+            autoCredits={autoCredits}
+            calcInteretGagne={calcInteretGagne}
+            allDates={allDates}
+            totEntrees={totEntrees}
+            totEntreesCaisse={totEntreesCaisse}
+            totEntreesRoulement={totEntreesRoulement}
+            totSortiesPrets={totSortiesPrets}
+            totRembours={totRembours}
+            totInterets={totInterets}
+            totSanctions={totSanctions}
+            totSorties={totSorties}
+            enrichLabel={enrichLabel}
+            openSub={openSub}
+            closeAll={closeAll}
+            prtMember={prtMember}
+            doDeleteCotisation={doDeleteCotisation}
+            doDeleteLoan={doDeleteLoan}
+            members={members}
+            loans={loans}
+            C={C} fmt={fmt}
+            Btn={Btn} Badge={Badge} TH={TH} TD={TD} SectionLabel={SectionLabel}
+          />
+          );
+        })()}
+
+      </div>
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   MemberDetailTabs — onglets Historique + Rapport Individuel
+═══════════════════════════════════════════════════════════════ */
+const MemberDetailTabs = ({
+  detailMb, detailCotis, detailCotisC, detailCotisR, detailLoans,
+  detailSanctions, autoDebits, autoCredits, calcInteretGagne, allDates,
+  totEntrees, totEntreesCaisse, totEntreesRoulement,
+  totSortiesPrets, totRembours, totInterets, totSanctions, totSorties,
+  enrichLabel, openSub, closeAll, prtMember,
+  doDeleteCotisation, doDeleteLoan,
+  members, loans,
+  C, fmt, Btn, Badge, TH, TD, SectionLabel,
+}) => {
+  const [activeTab, setActiveTab] = useState("historique");
+
+  const tabStyle = (key) => ({
+    padding: "9px 20px", border: "none", cursor: "pointer", fontWeight: 700,
+    fontSize: 12, borderBottom: `3px solid ${activeTab === key ? C.accent : "transparent"}`,
+    background: "transparent", color: activeTab === key ? C.accent : C.muted,
+    transition: "all .2s",
+  });
+
+  /* ── helpers description ── */
+  const getLoan   = (loanId) => loans.find(l => l.id === loanId);
+  const getEmpr   = (loan)   => loan ? (members.find(m => m.id === loan.emprunteurId)?.name || "?") : "?";
+  const getMbPct  = (loan)   => {
+    const c = (loan?.contributions||[]).find(x => x.memberId === detailMb.id);
+    return c ? (c.pct * 100).toFixed(1) + "%" : "—";
+  };
+  const getPeriod = (loan, date) => {
+    if (!loan) return 1;
+    return calcMontantActuel(loan, date).periods;
+  };
+
+  /* ── impression rapport individuel ── */
+  const printRapport = () => {
+    const cols = ["Date","Fond de Caisse","Fond de Roulement","Sorties (Prêt)","Entrées (Prêt)","Gains (Prêt)","Sanctions"];
+    const thead = `<tr>${cols.map(h=>`<th>${h}</th>`).join('')}</tr>`;
+    const tbody = allDates.map(date => {
+      const caisseJ  = detailCotisC.filter(c=>c.date===date).reduce((s,c)=>s+c.montant,0);
+      const roulemJ  = detailCotisR.filter(c=>c.date===date).reduce((s,c)=>s+c.montant,0);
+      const debitsJ  = autoDebits.filter(c=>c.date===date);
+      const creditsJ = autoCredits.filter(c=>c.date===date);
+      const sanctJ   = detailSanctions.filter(s=>s.date===date);
+      const fmtCell  = (v) => v>0 ? fmt(v) : '—';
+      const pretDescr = debitsJ.map(c=>{ const l=getLoan(c.loanId); return `<small>${getEmpr(l)} — ${fmt(l?.montant||0)} — ${getMbPct(l)}</small><br/><strong>${fmt(c.montant)}</strong>`; }).join('<br/>') || '—';
+      const entDescr  = creditsJ.map(c=>{ const l=getLoan(c.loanId); return `<small>${getEmpr(l)} — ${fmt(l?.montantDu||0)} — Pér. ${getPeriod(l,date)}</small><br/><strong>${fmt(c.montant)}</strong>`; }).join('<br/>') || '—';
+      const gainDescr = creditsJ.map(c=>{ const l=getLoan(c.loanId); const g=calcInteretGagne(c); return g>0?`<small>${getEmpr(l)} — Pér. ${getPeriod(l,date)}</small><br/><strong style="color:#f5a623">${fmt(g)}</strong>`:''; }).filter(Boolean).join('<br/>') || '—';
+      const sanctDescr= sanctJ.map(s=>`${fmt(s.montant)} <span class="${s.status==="payee"?"ok":"wa"}">${s.status==="payee"?"Payée":"En attente"}</span>`).join('<br/>') || '—';
+      return `<tr><td>${date}</td><td>${fmtCell(caisseJ)}</td><td>${fmtCell(roulemJ)}</td><td>${pretDescr}</td><td>${entDescr}</td><td>${gainDescr}</td><td>${sanctDescr}</td></tr>`;
+    }).join('');
+    const totRow = `<tr style="font-weight:800;background:#f2f2f8"><td>Totaux</td><td>${fmt(totEntreesCaisse)}</td><td>${fmt(totEntreesRoulement)}</td><td>${fmt(totSortiesPrets)}</td><td>${fmt(totRembours)}</td><td>${fmt(totInterets)}</td><td>${fmt(totSanctions)}</td></tr>`;
+    const summary = `<p style="margin-top:16px"><strong>Montant total des entrées du membre :</strong> ${fmt(totEntrees)}<br/>(Caisse : ${fmt(totEntreesCaisse)} · Roulement : ${fmt(totEntreesRoulement)} · Gains prêts : ${fmt(totInterets)})</p><p><strong>Total des sorties ou redevances du membre :</strong> ${fmt(totSorties)}<br/>(Contributions prêts : ${fmt(totSortiesPrets)} · Sanctions : ${fmt(totSanctions)})</p>`;
+    doPrint(`Rapport Individuel — ${detailMb.name}`,
+      `<h2>Rapport Individuel : ${detailMb.name}${detailMb.telephone ? ` — ${detailMb.telephone}` : ''}</h2>
+       <table><thead>${thead}</thead><tbody>${tbody}${totRow}</tbody></table>${summary}`);
+  };
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ padding:"18px 24px", borderBottom:`1px solid ${C.border}`, display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+        <div>
+          <div style={{ fontSize:19, fontWeight:800, marginBottom:3 }}>{detailMb.name}</div>
+          <div style={{ fontSize:12, color:C.muted, marginBottom:8 }}>
+            {detailMb.ville && <span style={{ marginRight:14 }}>📍 {detailMb.ville}</span>}
+            {detailMb.telephone && <span>📞 {detailMb.telephone}</span>}
+          </div>
+          <div style={{ display:"flex", gap:8 }}>
+            <Badge color={detailMb.aJour ? C.green : C.danger}>{detailMb.aJour ? "✓ À jour" : "✗ Non à jour"}</Badge>
+            <Badge color={detailMb.droitPret ? C.green : C.warn}>{detailMb.droitPret ? "✓ Droit prêt" : "⏸ Bloqué"}</Badge>
+          </div>
+        </div>
+        <div style={{ display:"flex", gap:7, alignItems:"center" }}>
+          <Btn bg={C.blue} sm onClick={() => openSub("addCotisation", { memberId:`${detailMb.id}` })}>+ Cotisation</Btn>
+          <Btn bg={C.accent} sm onClick={() => openSub("addLoan", { emprunteurId:`${detailMb.id}` })}>+ Prêt</Btn>
+          <Btn bg="rgba(255,255,255,0.07)" sm onClick={() => prtMember(detailMb)}>🖨️</Btn>
+          <button onClick={closeAll} style={{ background:"none", border:"none", color:C.muted, cursor:"pointer", fontSize:20, lineHeight:1, marginLeft:4 }}>✕</button>
+        </div>
+      </div>
+
+      {/* Stats rapides */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10, padding:"14px 24px", borderBottom:`1px solid ${C.border}` }}>
+        {[
+          { l:"Fonds Caisse",    v:fmt(detailMb.fondsCaisse),    c:detailMb.aJour ? C.green : C.warn },
+          { l:"Fonds Roulement", v:fmt(detailMb.fondsRoulement),  c:C.blue },
+          { l:"Part Prorata",    v:detailMb.prorata.toFixed(2)+"%", c:C.gold },
+          { l:"Prêt actif",      v:detailMb.loanActif ? fmt(detailMb.loanActif.montantDu) : "Aucun", c:detailMb.loanActif ? C.danger : C.muted },
+        ].map((s, i) => (
+          <div key={i} style={{ background:C.card2, borderRadius:10, padding:"10px 12px", border:`1px solid ${s.c}33` }}>
+            <div style={{ fontSize:13, fontWeight:800, color:s.c, marginBottom:3 }}>{s.v}</div>
+            <div style={{ fontSize:10, color:C.muted, textTransform:"uppercase", letterSpacing:0.6 }}>{s.l}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Onglets */}
+      <div style={{ display:"flex", gap:0, borderBottom:`1px solid ${C.border}`, paddingLeft:24, background:"rgba(255,255,255,0.02)" }}>
+        <button style={tabStyle("historique")} onClick={() => setActiveTab("historique")}>📋 Historique</button>
+        <button style={tabStyle("rapport")}    onClick={() => setActiveTab("rapport")}>📊 Rapport Individuel</button>
+      </div>
+
+      {/* ── ONGLET HISTORIQUE ── */}
+      {activeTab === "historique" && (
+        <div style={{ padding:"0 24px 24px" }}>
+          <SectionLabel label={`💰 Cotisations — ${detailCotis.filter(c=>!c.auto).length} manuelles + ${detailCotis.filter(c=>c.auto).length} auto`}/>
+          {detailCotis.length === 0
+            ? <div style={{ color:C.muted, fontSize:13, textAlign:"center", padding:"14px 0" }}>Aucune cotisation</div>
+            : (
               <div>
-                <div style={{ fontSize:19, fontWeight:800, marginBottom:3 }}>{detailMb.name}</div>
-                <div style={{ fontSize:12, color:C.muted, marginBottom:8 }}>
-                  {detailMb.ville&&<span style={{ marginRight:14 }}>📍 {detailMb.ville}</span>}
-                  {detailMb.telephone&&<span>📞 {detailMb.telephone}</span>}
-                </div>
-                <div style={{ display:"flex", gap:8 }}>
-                  <Badge color={detailMb.aJour?C.green:C.danger}>{detailMb.aJour?"✓ À jour":"✗ Non à jour"}</Badge>
-                  <Badge color={detailMb.droitPret?C.green:C.warn}>{detailMb.droitPret?"✓ Droit prêt":"⏸ Bloqué"}</Badge>
-                </div>
-              </div>
-                <div style={{ display:"flex", gap:7, alignItems:"center" }}>
-                  <Btn bg={C.blue}   sm onClick={() => openSub("addCotisation",{memberId:`${detailMb.id}`})}>+ Cotisation</Btn>
-                  <Btn bg={C.accent} sm onClick={() => openSub("addLoan",{emprunteurId:`${detailMb.id}`})}>+ Prêt</Btn>
-                  <Btn bg="rgba(255,255,255,0.07)" sm onClick={() => prtMember(detailMb)}>🖨️</Btn>
-                  <button onClick={closeAll} style={{ background:"none", border:"none", color:C.muted, cursor:"pointer", fontSize:20, lineHeight:1, marginLeft:4 }}>✕</button>
-                </div>
-            </div>
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10, padding:"14px 24px", borderBottom:`1px solid ${C.border}` }}>
-              {[{l:"Fonds Caisse",v:fmt(detailMb.fondsCaisse),c:detailMb.aJour?C.green:C.warn},{l:"Fonds Roulement",v:fmt(detailMb.fondsRoulement),c:C.blue},{l:"Part Prorata",v:detailMb.prorata.toFixed(2)+"%",c:C.gold},{l:"Prêt actif",v:detailMb.loanActif?fmt(detailMb.loanActif.montantDu):"Aucun",c:detailMb.loanActif?C.danger:C.muted}].map((s,i) => (
-                <div key={i} style={{ background:C.card2, borderRadius:10, padding:"10px 12px", border:`1px solid ${s.c}33` }}>
-                  <div style={{ fontSize:13, fontWeight:800, color:s.c, marginBottom:3 }}>{s.v}</div>
-                  <div style={{ fontSize:10, color:C.muted, textTransform:"uppercase", letterSpacing:0.6 }}>{s.l}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ padding:"0 24px 24px" }}>
-              <SectionLabel label={`💰 Cotisations — ${detailCotis.filter(c=>!c.auto).length} manuelles + ${detailCotis.filter(c=>c.auto).length} auto`}/>
-              {detailCotis.length===0 ? <div style={{ color:C.muted, fontSize:13, textAlign:"center", padding:"14px 0" }}>Aucune cotisation</div> : (
-                <div>
-                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
-                    <div style={{ background:`${C.blue}14`, border:`1px solid ${C.blue}30`, borderRadius:10, padding:"10px 14px" }}><div style={{ fontSize:11, color:C.muted, textTransform:"uppercase", marginBottom:3 }}>🏦 Fonds de Caisse</div><div style={{ fontSize:15, fontWeight:800, color:C.blue }}>{fmt(detailCotisC.reduce((s,c)=>s+c.montant,0))}</div><div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{detailCotisC.length} versement{detailCotisC.length!==1?"s":""}</div></div>
-                    <div style={{ background:`${C.green}14`, border:`1px solid ${C.green}30`, borderRadius:10, padding:"10px 14px" }}><div style={{ fontSize:11, color:C.muted, textTransform:"uppercase", marginBottom:3 }}>🔄 Fonds de Roulement</div><div style={{ fontSize:15, fontWeight:800, color:C.green }}>{fmt(detailCotisR.reduce((s,c)=>s+c.montant,0))}</div><div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{detailCotisR.length} versement{detailCotisR.length!==1?"s":""}</div></div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
+                  <div style={{ background:`${C.blue}14`, border:`1px solid ${C.blue}30`, borderRadius:10, padding:"10px 14px" }}>
+                    <div style={{ fontSize:11, color:C.muted, textTransform:"uppercase", marginBottom:3 }}>🏦 Fonds de Caisse</div>
+                    <div style={{ fontSize:15, fontWeight:800, color:C.blue }}>{fmt(detailCotisC.reduce((s,c)=>s+c.montant,0))}</div>
+                    <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{detailCotisC.length} versement{detailCotisC.length!==1?"s":""}</div>
                   </div>
-                  <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
-                    <thead><tr>{["Date & Heure","Type / Opération","Montant","Actions"].map(h=><TH key={h} ch={h}/>)}</tr></thead>
-                    <tbody>{detailCotis.map(c => {
-                      const isD=c.direction==="debit", isCr=c.direction==="credit"&&c.auto;
-                      const bColor = isD?C.warn:isCr?C.green:c.type==="caisse"?C.blue:C.green;
-                      const enriched = enrichLabel(c, detailMb.id);
-                      const labelText = enriched || (isD?`📤 ${c.label||"Contribution"}`:isCr?`📥 ${c.label||"Retour"}`:c.type==="caisse"?"🏦 Versement Caisse":"🔄 Versement Roulement");
-                      return (<tr key={c.id}>
+                  <div style={{ background:`${C.green}14`, border:`1px solid ${C.green}30`, borderRadius:10, padding:"10px 14px" }}>
+                    <div style={{ fontSize:11, color:C.muted, textTransform:"uppercase", marginBottom:3 }}>🔄 Fonds de Roulement</div>
+                    <div style={{ fontSize:15, fontWeight:800, color:C.green }}>{fmt(detailCotisR.reduce((s,c)=>s+c.montant,0))}</div>
+                    <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{detailCotisR.length} versement{detailCotisR.length!==1?"s":""}</div>
+                  </div>
+                </div>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                  <thead><tr>{["Date & Heure","Type / Opération","Montant","Actions"].map(h=><TH key={h} ch={h}/>)}</tr></thead>
+                  <tbody>{detailCotis.map(c => {
+                    const isD = c.direction==="debit", isCr = c.direction==="credit" && c.auto;
+                    const bColor = isD ? C.warn : isCr ? C.green : c.type==="caisse" ? C.blue : C.green;
+                    const enriched = enrichLabel(c, detailMb.id);
+                    const labelText = enriched || (isD ? `📤 ${c.label||"Contribution"}` : isCr ? `📥 ${c.label||"Retour"}` : c.type==="caisse" ? "🏦 Versement Caisse" : "🔄 Versement Roulement");
+                    return (
+                      <tr key={c.id}>
                         <TD s={{ fontSize:11, color:C.muted, whiteSpace:"nowrap", minWidth:85 }}>
-                          {c.date}
-                          <div style={{ fontSize:10 }}>{c.heure||"—"}</div>
+                          {c.date}<div style={{ fontSize:10 }}>{c.heure||"—"}</div>
                         </TD>
                         <TD>
-                          <span style={{ display:"inline-block", padding:"3px 9px", borderRadius:12, fontSize:11, fontWeight:700, color:"#fff", background:bColor+"cc", wordBreak:"break-word", maxWidth:380 }}>
+                          <span style={{ display:"inline-block", padding:"3px 9px", borderRadius:12, fontSize:11, fontWeight:700, color:"#fff", background:bColor+"cc", wordBreak:"break-word", maxWidth:360 }}>
                             {labelText}
                           </span>
                         </TD>
-                        <TD><strong style={{ color:isD?C.danger:C.gold }}>{isD?"−":"+"} {fmt(c.montant)}</strong></TD>
-                        <TD>{c.auto ? <span style={{ fontSize:10, color:C.muted, fontStyle:"italic" }}>auto</span> : (
-                          <div style={{ display:"flex", gap:3 }}>
-                            <Btn bg={C.gold}   xs onClick={() => openSub("editCotisation",{cotisId:`${c.id}`,memberId:`${c.memberId}`,type:c.type,montant:`${c.montant}`,date:c.date})}>✏️</Btn>
-                            <Btn bg={C.danger} xs onClick={() => doDeleteCotisation(c.id)}>🗑️</Btn>
-                          </div>
-                        )}</TD>
-                      </tr>);
-                    })}</tbody>
-                  </table>
-                </div>
-              )}
+                        <TD><strong style={{ color:isD ? C.danger : C.gold }}>{isD?"−":"+"} {fmt(c.montant)}</strong></TD>
+                        <TD>{c.auto
+                          ? <span style={{ fontSize:10, color:C.muted, fontStyle:"italic" }}>auto</span>
+                          : <div style={{ display:"flex", gap:3 }}>
+                              <Btn bg={C.gold}   xs onClick={() => openSub("editCotisation",{cotisId:`${c.id}`,memberId:`${c.memberId}`,type:c.type,montant:`${c.montant}`,date:c.date})}>✏️</Btn>
+                              <Btn bg={C.danger} xs onClick={() => doDeleteCotisation(c.id)}>🗑️</Btn>
+                            </div>
+                        }</TD>
+                      </tr>
+                    );
+                  })}</tbody>
+                </table>
+              </div>
+            )
+          }
 
-              <SectionLabel label={`💳 Prêts — ${detailLoans.length} au total`}/>
-              {detailLoans.length===0 ? <div style={{ color:C.muted, fontSize:13, textAlign:"center", padding:"14px 0" }}>Aucun prêt</div> : (
-                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
-                  <thead><tr>{["Date","Montant","Intérêts","Total Dû","Échéance","Statut","Actions"].map(h=><TH key={h} ch={h}/>)}</tr></thead>
-                  <tbody>{detailLoans.map(l => {
-                    const d=Math.ceil((new Date(l.echeance) - new Date()) / 864e5);
-                    return (<tr key={l.id}>
+          <SectionLabel label={`💳 Prêts — ${detailLoans.length} au total`}/>
+          {detailLoans.length === 0
+            ? <div style={{ color:C.muted, fontSize:13, textAlign:"center", padding:"14px 0" }}>Aucun prêt</div>
+            : (
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                <thead><tr>{["Date","Montant","Intérêts","Total Dû","Échéance","Statut","Actions"].map(h=><TH key={h} ch={h}/>)}</tr></thead>
+                <tbody>{detailLoans.map(l => {
+                  const d = Math.ceil((new Date(l.echeance) - new Date()) / 864e5);
+                  return (
+                    <tr key={l.id}>
                       <TD s={{ fontSize:11, color:C.muted }}>{l.date}</TD>
                       <TD>{fmt(l.montant)}</TD>
                       <TD s={{ color:C.gold }}>{fmt(l.interets)}</TD>
                       <TD><strong style={{ color:C.accent }}>{fmt(l.montantDu)}</strong></TD>
-                      <TD><div style={{ fontSize:11 }}>{l.echeance}</div>{l.status==="actif"&&<div style={{ fontSize:10, color:d<=0?C.danger:d<=30?C.warn:C.muted }}>{d<=0?`🚨 ${Math.abs(d)}j`:`${d}j restants`}</div>}</TD>
+                      <TD>
+                        <div style={{ fontSize:11 }}>{l.echeance}</div>
+                        {l.status==="actif" && <div style={{ fontSize:10, color:d<=0?C.danger:d<=30?C.warn:C.muted }}>{d<=0?`🚨 ${Math.abs(d)}j`:`${d}j restants`}</div>}
+                      </TD>
                       <TD><Badge color={l.status==="actif"?C.warn:C.green}>{l.status==="actif"?"En cours":"Remboursé"}</Badge></TD>
                       <TD><div style={{ display:"flex", gap:3 }}>
-                        {l.status==="actif"&&<Btn bg={C.green} xs onClick={() => openSub("repayLoan",{loanId:`${l.id}`})}>✓ Payer</Btn>}
+                        {l.status==="actif" && <Btn bg={C.green} xs onClick={() => openSub("repayLoan",{loanId:`${l.id}`})}>✓ Payer</Btn>}
                         <Btn bg={C.gold}   xs onClick={() => openSub("editLoan",{loanId:`${l.id}`,montant:`${l.montant}`,date:l.date,assistantId:`${l.assistantId||""}`,emprunteurId:`${l.emprunteurId}`})}>✏️</Btn>
                         <Btn bg={C.danger} xs onClick={() => doDeleteLoan(l.id)}>🗑️</Btn>
                       </div></TD>
-                    </tr>);
-                  })}</tbody>
-                </table>
-              )}
+                    </tr>
+                  );
+                })}</tbody>
+              </table>
+            )
+          }
+        </div>
+      )}
+
+      {/* ── ONGLET RAPPORT INDIVIDUEL ── */}
+      {activeTab === "rapport" && (
+        <div style={{ padding:"16px 24px 28px" }}>
+          {/* Barre titre + bouton imprimer */}
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+            <div style={{ fontWeight:800, fontSize:15, color:C.text }}>
+              {detailMb.name}{detailMb.telephone ? ` : ${detailMb.telephone}` : ""}
+            </div>
+            <Btn bg="rgba(255,255,255,0.07)" sm onClick={printRapport}>🖨️ Imprimer le rapport</Btn>
+          </div>
+
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12, minWidth:700 }}>
+              <thead>
+                <tr>
+                  {["Date","Fond de Caisse","Fond de Roulement","Sorties (Prêt)","Entrées (Prêt)","Gains (Prêt)","Sanctions"].map(h => (
+                    <th key={h} style={{ padding:"9px 10px", background:"rgba(255,255,255,0.05)", color:C.muted, fontWeight:700, fontSize:11, textTransform:"uppercase", letterSpacing:0.5, borderBottom:`2px solid ${C.border}`, textAlign:"center", whiteSpace:"nowrap" }}>
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {allDates.length === 0
+                  ? <tr><td colSpan={7} style={{ color:C.muted, textAlign:"center", padding:"20px", fontStyle:"italic" }}>Aucune opération enregistrée</td></tr>
+                  : allDates.map((date, idx) => {
+                    /* Cotisations manuelles du jour */
+                    const caisseJour   = detailCotisC.filter(c => c.date===date);
+                    const roulemtJour  = detailCotisR.filter(c => c.date===date);
+                    /* Contribution du membre à des prêts ce jour (auto debit) */
+                    const debitsJour   = autoDebits.filter(c => c.date===date);
+                    /* Retours reçus par le membre ce jour (auto credit) */
+                    const creditsJour  = autoCredits.filter(c => c.date===date);
+                    /* Sanctions ce jour */
+                    const sanctJour    = detailSanctions.filter(s => s.date===date);
+
+                    const sCaisse  = caisseJour.reduce((s,c)=>s+c.montant, 0);
+                    const sRoulem  = roulemtJour.reduce((s,c)=>s+c.montant, 0);
+                    /* Sortie = montant de roulement du membre prélevé pour financer un prêt */
+                    const sPrets   = debitsJour.reduce((s,c)=>s+c.montant, 0);
+                    /* Remboursement reçu = capital + intérêts gagnés retournés au membre */
+                    const sRembou  = creditsJour.reduce((s,c)=>s+c.montant, 0);
+                    /* Intérêts gagnés = part d'intérêts uniquement (retour − contribution initiale) */
+                    const sInter   = creditsJour.reduce((s,c)=>s+calcInteretGagne(c), 0);
+                    const sSanct   = sanctJour.reduce((s,x)=>s+x.montant, 0);
+
+                    const rowBg = idx%2===0 ? "transparent" : "rgba(255,255,255,0.02)";
+                    const tdBase = { padding:"9px 10px", borderBottom:`1px solid ${C.border}`, textAlign:"center", background:rowBg, verticalAlign:"top" };
+                    const cell = (val, color=C.text) => (
+                      <td style={{ ...tdBase, color:val>0?color:C.muted, fontWeight:val>0?700:400 }}>
+                        {val > 0 ? fmt(val) : "—"}
+                      </td>
+                    );
+
+                    return (
+                      <tr key={date}>
+                        <td style={{ padding:"9px 10px", borderBottom:`1px solid ${C.border}`, background:rowBg, fontSize:11, color:C.muted, whiteSpace:"nowrap", verticalAlign:"top" }}>{date}</td>
+                        {cell(sCaisse, C.blue)}
+                        {cell(sRoulem, C.green)}
+
+                        {/* ── Sorties (Prêt) : contribution du membre à un prêt ── */}
+                        <td style={tdBase}>
+                          {debitsJour.length === 0 ? <span style={{color:C.muted}}>—</span>
+                            : debitsJour.map(c => {
+                              const loan = getLoan(c.loanId);
+                              return (
+                                <div key={c.id} style={{marginBottom:debitsJour.length>1?6:0}}>
+                                  <div style={{fontSize:9, color:C.muted, marginBottom:2, lineHeight:1.4}}>
+                                    {getEmpr(loan)} — {fmt(loan?.montant||0)} — {getMbPct(loan)}
+                                  </div>
+                                  <strong style={{color:C.danger}}>{fmt(c.montant)}</strong>
+                                </div>
+                              );
+                            })
+                          }
+                        </td>
+
+                        {/* ── Entrées (Prêt) : retour reçu lors d'un remboursement ── */}
+                        <td style={tdBase}>
+                          {creditsJour.length === 0 ? <span style={{color:C.muted}}>—</span>
+                            : creditsJour.map(c => {
+                              const loan = getLoan(c.loanId);
+                              const per  = getPeriod(loan, date);
+                              return (
+                                <div key={c.id} style={{marginBottom:creditsJour.length>1?6:0}}>
+                                  <div style={{fontSize:9, color:C.muted, marginBottom:2, lineHeight:1.4}}>
+                                    {getEmpr(loan)} — {fmt(loan?.montantDu||0)} — Pér. {per}
+                                  </div>
+                                  <strong style={{color:C.accent}}>{fmt(c.montant)}</strong>
+                                </div>
+                              );
+                            })
+                          }
+                        </td>
+
+                        {/* ── Gains (Prêt) : part d'intérêts uniquement ── */}
+                        <td style={tdBase}>
+                          {creditsJour.length === 0 ? <span style={{color:C.muted}}>—</span>
+                            : (() => {
+                              const items = creditsJour.map(c => ({ c, g: calcInteretGagne(c), loan: getLoan(c.loanId) })).filter(x => x.g > 0);
+                              return items.length === 0 ? <span style={{color:C.muted}}>—</span>
+                                : items.map(({c, g, loan}) => {
+                                  const per = getPeriod(loan, date);
+                                  return (
+                                    <div key={c.id} style={{marginBottom:items.length>1?6:0}}>
+                                      <div style={{fontSize:9, color:C.muted, marginBottom:2, lineHeight:1.4}}>
+                                        {getEmpr(loan)} — Pér. {per}
+                                      </div>
+                                      <strong style={{color:C.gold}}>{fmt(g)}</strong>
+                                    </div>
+                                  );
+                                });
+                            })()
+                          }
+                        </td>
+                        <td style={{ padding:"9px 10px", borderBottom:`1px solid ${C.border}`, textAlign:"center", background:rowBg }}>
+                          {sanctJour.length === 0 ? <span style={{ color:C.muted }}>—</span>
+                            : sanctJour.map(s => (
+                              <div key={s.id} style={{ marginBottom:2 }}>
+                                <span style={{ color:s.status==="payee"?C.green:C.warn, fontWeight:700, fontSize:11 }}>
+                                  {fmt(s.montant)}
+                                </span>
+                                <span style={{ marginLeft:5 }}>
+                                  <Badge color={s.status==="payee"?C.green:C.warn}>
+                                    {s.status==="payee"?"✓ Payée":"⏳ En attente"}
+                                  </Badge>
+                                </span>
+                              </div>
+                            ))
+                          }
+                        </td>
+                      </tr>
+                    );
+                  })
+                }
+              </tbody>
+              {/* Ligne Totaux */}
+              <tfoot>
+                <tr style={{ background:"rgba(255,255,255,0.06)" }}>
+                  <td style={{ padding:"10px", fontWeight:800, fontSize:12, color:C.text, borderTop:`2px solid ${C.border}` }}>Totaux</td>
+                  {[
+                    { v:totEntreesCaisse,    c:C.blue },
+                    { v:totEntreesRoulement, c:C.green },
+                    { v:totSortiesPrets,     c:C.danger },
+                    { v:totRembours,         c:C.accent },
+                    { v:totInterets,         c:C.gold },
+                    { v:totSanctions,        c:C.warn },
+                  ].map(({ v, c }, i) => (
+                    <td key={i} style={{ padding:"10px", fontWeight:800, fontSize:12, color:v>0?c:C.muted, borderTop:`2px solid ${C.border}`, textAlign:"center" }}>
+                      {v > 0 ? fmt(v) : "—"}
+                    </td>
+                  ))}
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          {/* Résumé entrées/sorties */}
+          <div style={{ marginTop:20, display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            <div style={{ background:`${C.green}12`, border:`1px solid ${C.green}30`, borderRadius:10, padding:"14px 18px" }}>
+              <div style={{ fontSize:11, color:C.muted, textTransform:"uppercase", letterSpacing:0.7, marginBottom:6 }}>📥 Montant total des entrées du membre</div>
+              <div style={{ fontSize:20, fontWeight:900, color:C.green }}>{fmt(totEntrees)}</div>
+              <div style={{ fontSize:11, color:C.muted, marginTop:4 }}>
+                Caisse : {fmt(totEntreesCaisse)} · Roulement : {fmt(totEntreesRoulement)} · Gains prêts : {fmt(totInterets)}
+              </div>
+            </div>
+            <div style={{ background:`${C.danger}12`, border:`1px solid ${C.danger}30`, borderRadius:10, padding:"14px 18px" }}>
+              <div style={{ fontSize:11, color:C.muted, textTransform:"uppercase", letterSpacing:0.7, marginBottom:6 }}>📤 Total des sorties ou redevances du membre</div>
+              <div style={{ fontSize:20, fontWeight:900, color:C.danger }}>{fmt(totSorties)}</div>
+              <div style={{ fontSize:11, color:C.muted, marginTop:4 }}>
+                Contributions prêts : {fmt(totSortiesPrets)} · Sanctions : {fmt(totSanctions)}
+              </div>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 };

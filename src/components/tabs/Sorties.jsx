@@ -1,12 +1,12 @@
 import React from "react";
 import { useApp } from "../../context/AppContext";
 import { SHdr, Card, Btn, TH, TD, Badge } from "../ui";
-import { C, fmt, doPrint } from "../../utils";
+import { C, fmt, doPrint, fmtDate } from "../../utils";
 
 export const Sorties = () => {
   const { sorties, members, openM, doDeleteSortie } = useApp();
 
-  const prtSorties = () => doPrint("Sorties de Fonds", `<table><thead><tr><th>Date</th><th>Source</th><th>Raison</th><th>Montant</th></tr></thead><tbody>${[...sorties].sort((a,b)=>new Date(b.date)-new Date(a.date)).map(s=>`<tr><td>${s.date}</td><td>${s.source==="caisse"?"Fonds Caisse":"Fonds Association"}</td><td>${s.raison}</td><td><strong>${fmt(s.montant)}</strong></td></tr>`).join("")}</tbody></table>`);
+  const prtSorties = () => doPrint("Sorties de Fonds", `<table><thead><tr><th>Date</th><th>Source</th><th>Raison</th><th>Montant</th></tr></thead><tbody>${[...sorties].sort((a,b)=>new Date(b.date)-new Date(a.date)).map(s=>`<tr><td>${fmtDate(s.date)}</td><td>${s.source==="caisse"?"Fonds Caisse":"Fonds Association"}</td><td>${s.raison}</td><td><strong>${fmt(s.montant)}</strong></td></tr>`).join("")}</tbody></table>`);
 
   return (
     <div>
@@ -22,7 +22,7 @@ export const Sorties = () => {
             <thead><tr>{["Date","Source","Raison","Membres concernés","Part / membre","Total","Actions"].map(h=><TH key={h} ch={h}/>)}</tr></thead>
             <tbody>{[...sorties].sort((a,b)=>new Date(b.date)-new Date(a.date)).map(s => (
               <tr key={s.id}>
-                <TD s={{ color:C.muted, fontSize:12, whiteSpace:"nowrap" }}>{s.date}<div style={{ fontSize:10 }}>{s.heure||""}</div></TD>
+                <TD s={{ color:C.muted, fontSize:12, whiteSpace:"nowrap" }}>{fmtDate(s.date)}<div style={{ fontSize:10 }}>{s.heure||""}</div></TD>
                 <TD><Badge color={s.source==="caisse"?C.blue:C.purple}>{s.source==="caisse"?"🏦 Caisse":"🏛️ Asso"}</Badge></TD>
                 <TD style={{ maxWidth:200 }}><span style={{ fontSize:12 }}>{s.raison}</span></TD>
                 <TD s={{ fontSize:12 }}>{s.source==="caisse"&&s.memberIds?<div style={{ lineHeight:1.6 }}>{s.memberIds.map(id=>{const mb=members.find(m=>`${m.id}`===`${id}`);return mb?<div key={id} style={{ color:C.muted }}>{mb.name}</div>:null;})}</div>:<span style={{ color:C.muted }}>—</span>}</TD>

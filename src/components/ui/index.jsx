@@ -33,12 +33,13 @@ export const FilterBar = ({ options, value, onChange }) => (
   </div>
 );
 
-export const SHdr = ({ title, printFn, onAdd, addLabel }) => (
+export const SHdr = ({ title, printFn, printLabel="🖨️ Rapport", printFn2, printLabel2, onAdd, addLabel }) => (
   <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
     <div style={{ fontSize:20, fontWeight:700 }}>{title}</div>
     <div style={{ display:"flex", gap:8 }}>
-      {printFn && <Btn bg="rgba(255,255,255,0.07)" onClick={printFn}>🖨️ Rapport</Btn>}
-      {onAdd   && <Btn bg={C.accent} onClick={onAdd}>{addLabel}</Btn>}
+      {printFn  && <Btn bg="rgba(255,255,255,0.07)" onClick={printFn}>{printLabel}</Btn>}
+      {printFn2 && <Btn bg="rgba(255,255,255,0.07)" onClick={printFn2}>{printLabel2}</Btn>}
+      {onAdd    && <Btn bg={C.accent} onClick={onAdd}>{addLabel}</Btn>}
     </div>
   </div>
 );

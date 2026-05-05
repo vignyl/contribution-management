@@ -4,17 +4,29 @@ import { FilterBar, SHdr, Card, TH, TD, Badge, Btn } from "../ui";
 import { C, fmt } from "../../utils";
 
 export const Membres = () => {
-  const { fMbr, setFMbr, membersX, filteredMembers, openM, doDeleteMember, prtAllRapports } = useApp();
+  const { fMbr, setFMbr, membersX, filteredMembers, openM, doDeleteMember, prtFilteredMembers, prtAllRapports, prtMember } = useApp();
+
+  const options = [
+    {value:"tous",     label:`Tous (${membersX.length})`},
+    {value:"ajour",    label:`✓ À jour (${membersX.filter(m=>m.aJour).length})`},
+    {value:"nonajour", label:`✗ Non à jour (${membersX.filter(m=>!m.aJour).length})`},
+    {value:"loan",     label:`💳 Avec prêt actif (${membersX.filter(m=>!!m.loanActif).length})`},
+  ];
+
+  const currentLabel = options.find(o => o.value === fMbr)?.label || "Membres";
 
   return (
     <div>
-      <SHdr title="👥 Gestion des Membres" printFn={prtAllRapports} onAdd={() => openM("addMember")} addLabel="+ Nouveau Membre"/>
-      <FilterBar value={fMbr} onChange={setFMbr} options={[
-        {value:"tous",     label:`Tous (${membersX.length})`},
-        {value:"ajour",    label:`✓ À jour (${membersX.filter(m=>m.aJour).length})`},
-        {value:"nonajour", label:`✗ Non à jour (${membersX.filter(m=>!m.aJour).length})`},
-        {value:"loan",     label:`💳 Avec prêt actif (${membersX.filter(m=>!!m.loanActif).length})`},
-      ]}/>
+      <SHdr 
+        title="👥 Gestion des Membres" 
+        printFn={() => prtFilteredMembers(currentLabel)} 
+        printLabel="🖨️ Liste filtrée"
+        printFn2={prtAllRapports} 
+        printLabel2="🖨️ Tous les Rapports"
+        onAdd={() => openM("addMember")} 
+        addLabel="+ Nouveau Membre"
+      />
+      <FilterBar value={fMbr} onChange={setFMbr} options={options}/>
       {filteredMembers.length===0 ? (
         <Card style={{ textAlign:"center", padding:"40px" }}>
           <div style={{ fontSize:36, marginBottom:10 }}>👤</div>
@@ -37,12 +49,26 @@ export const Membres = () => {
                 <TD><div style={{ display:"flex", gap:3, flexWrap:"wrap" }}>
                   <Btn bg={C.blue}   sm onClick={() => openM("addCotisation",{memberId:m.id})}>+ Cotis.</Btn>
                   <Btn bg={C.accent} sm onClick={() => openM("addLoan",{emprunteurId:`${m.id}`})}>+ Prêt</Btn>
+                  <Btn bg="rgba(255,255,255,0.08)" sm onClick={() => prtMember(m.id)} title="Imprimer le rapport individuel">🖨️</Btn>
                   <Btn bg="rgba(255,255,255,0.1)" sm onClick={() => openM("memberDetail",{memberId:m.id})}>👁️</Btn>
                   <Btn bg={C.gold}   sm onClick={() => openM("editMember",{memberId:m.id,name:m.name,ville:m.ville||"",telephone:m.telephone||""})}>✏️</Btn>
                   <Btn bg={C.danger} sm onClick={() => doDeleteMember(m.id)}>🗑️</Btn>
                 </div></TD>
               </tr>
             ))}</tbody>
+            <tfoot style={{ background:"rgba(255,255,255,0.03)", fontWeight:800 }}>
+              <tr>
+                <TD style={{ textTransform:"uppercase", fontSize:11, letterSpacing:1 }}>TOTAUX</TD>
+                <TD></TD>
+                <TD></TD>
+                <TD style={{ color:C.blue }}>{fmt(filteredMembers.reduce((s,m)=>s+m.fondsCaisse,0))}</TD>
+                <TD style={{ color:C.green }}>{fmt(filteredMembers.reduce((s,m)=>s+m.fondsRoulement,0))}</TD>
+                <TD style={{ color:C.gold }}>{filteredMembers.reduce((s,m)=>s+m.prorata,0).toFixed(2)}%</TD>
+                <TD></TD>
+                <TD style={{ color:C.warn }}>{fmt(filteredMembers.reduce((s,m)=>s+(m.loanActif?m.loanActif.montantDu:0),0))}</TD>
+                <TD></TD>
+              </tr>
+            </tfoot>
           </table>
         </Card>
       )}

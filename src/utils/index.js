@@ -1,6 +1,22 @@
 export const fmt    = (n) => new Intl.NumberFormat("fr-FR").format(Math.round(n || 0)) + " FCFA";
 export const tod    = () => new Date().toISOString().split("T")[0];
-export const nowLbl = () => new Date().toLocaleString("fr-FR");
+export const nowLbl = () => {
+  const d = new Date();
+  const day = d.getDate().toString().padStart(2, "0");
+  const month = (d.getMonth() + 1).toString().padStart(2, "0");
+  const year = d.getFullYear();
+  const hours = d.getHours().toString().padStart(2, "0");
+  const minutes = d.getMinutes().toString().padStart(2, "0");
+  return `${day}/${month}/${year} ${hours}:${minutes}`;
+};
+export const fmtDate = (d) => {
+  if (!d) return "—";
+  if (d.includes("-") && d.split("-")[0].length === 4) {
+    const [y, m, day] = d.split("-");
+    return `${day}/${m}/${y}`;
+  }
+  return d;
+};
 export const add3M  = (d) => { const x = new Date(d); x.setMonth(x.getMonth()+3); return x.toISOString().split("T")[0]; };
 export const dLeft  = (d) => Math.ceil((new Date(d) - new Date()) / 864e5);
 export const uid    = () => Date.now() + Math.floor(Math.random()*9999);
@@ -98,6 +114,7 @@ export const SK = {
   cotisations:"afay:cotisations", dismissed:"afay:dismissed",
   sanctions:"afay:sanctions", sorties:"afay:sorties",
   authCreds:"afay:authCreds",
+  sessions:"afay:sessions", dailyContributions:"afay:dailyContributions",
 };
 
 export const DEFAULT_USER = "afay-username";

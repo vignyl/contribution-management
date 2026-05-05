@@ -1,14 +1,20 @@
 import React from "react";
 import { useApp } from "../../context/AppContext";
 import { FilterBar, SHdr, Card, TH, TD, Badge, Btn } from "../ui";
-import { C, fmt, dLeft, tod, calcMontantActuel } from "../../utils";
+import { C, fmt, dLeft, tod, calcMontantActuel, fmtDate } from "../../utils";
 
 export const Prets = () => {
-  const { fLoan, setFLoan, loans, actLoans, filteredLoans, members, openM, doDeleteLoan } = useApp();
+  const { fLoan, setFLoan, loans, actLoans, filteredLoans, members, openM, doDeleteLoan, prtLoanReport, prtAllLoanReports } = useApp();
 
   return (
     <div>
-      <SHdr title="💳 Gestion des Prêts" onAdd={() => openM("addLoan")} addLabel="+ Nouveau Prêt"/>
+      <SHdr 
+        title="💳 Gestion des Prêts" 
+        onAdd={() => openM("addLoan")} 
+        addLabel="+ Nouveau Prêt"
+        printFn2={prtAllLoanReports}
+        printLabel2="🖨️ Rapports de Prêts"
+      />
       <FilterBar value={fLoan} onChange={setFLoan} options={[
         {value:"tous",      label:`Tous (${loans.length})`},
         {value:"actif",     label:`⏳ Actifs (${loans.filter(l=>l.status==="actif").length})`},
@@ -32,22 +38,33 @@ export const Prets = () => {
               const actual=l.status==="actif" ? calcMontantActuel(l,tod()) : { montantDu:l.montantRembourse||l.montantDu, interets:l.interetsRembourse||l.interets, periods:"—" };
               const overdue=l.status==="actif"&&d<=0;
               return (<tr key={l.id} style={{ background:overdue?"rgba(192,57,43,0.06)":"transparent" }}>
-                <TD s={{ color:C.muted, fontSize:12 }}>{l.date}</TD>
+                <TD s={{ color:C.muted, fontSize:12 }}>{fmtDate(l.date)}</TD>
                 <TD><strong>{empr?.name}</strong></TD>
                 <TD>{fmt(l.montant)}</TD>
                 <TD s={{ color:C.muted, fontSize:12 }}>{fmt(l.montant*1.1)}<div style={{ fontSize:10, color:C.muted }}>1 période</div></TD>
                 <TD><strong style={{ color:overdue?C.danger:C.accent, fontSize:14 }}>{fmt(actual.montantDu)}</strong><div style={{ fontSize:10, color:C.gold }}>+{fmt(actual.interets)} intérêts</div></TD>
                 <TD><span style={{ fontWeight:700, color:overdue?C.danger:C.gold, fontSize:13 }}>{typeof actual.periods==="number"?`Période ${actual.periods}`:actual.periods}</span>{overdue&&<div style={{ fontSize:10, color:C.danger }}>🚨 {Math.abs(d)}j retard</div>}{l.status==="actif"&&!overdue&&<div style={{ fontSize:10, color:d<=30?C.warn:C.muted }}>{d}j restants</div>}</TD>
-                <TD s={{ fontSize:12, color:overdue?C.danger:C.muted }}>{l.echeance}</TD>
-                <TD>{l.dateRembours?<span style={{ fontSize:12, color:C.green, fontWeight:600 }}>{l.dateRembours}</span>:<span style={{ color:C.muted, fontSize:12 }}>—</span>}</TD>
+                <TD s={{ fontSize:12, color:overdue?C.danger:C.muted }}>{fmtDate(l.echeance)}</TD>
+                <TD>{l.dateRembours?<span style={{ fontSize:12, color:C.green, fontWeight:600 }}>{fmtDate(l.dateRembours)}</span>:<span style={{ color:C.muted, fontSize:12 }}>—</span>}</TD>
                 <TD><Badge color={l.status==="actif"?(overdue?C.danger:C.warn):C.green}>{l.status==="actif"?(overdue?"🚨 En retard":"En cours"):"✓ Remboursé"}</Badge></TD>
                 <TD><div style={{ display:"flex", gap:3 }}>
                   {l.status==="actif"&&<Btn bg={C.green} sm onClick={() => openM("repayLoan",{loanId:`${l.id}`})}>✓ Payer</Btn>}
+                  <Btn bg="rgba(255,255,255,0.08)" sm onClick={() => prtLoanReport(l.emprunteurId)} title="Imprimer l'historique de prêt">🖨️</Btn>
                   <Btn bg={C.gold}   sm onClick={() => openM("editLoan",{loanId:`${l.id}`,montant:`${l.montant}`,date:l.date,assistantId:`${l.assistantId||""}`,emprunteurId:`${l.emprunteurId}`})}>✏️</Btn>
                   <Btn bg={C.danger} sm onClick={() => doDeleteLoan(l.id)}>🗑️</Btn>
                 </div></TD>
               </tr>);
             })}</tbody>
+            <tfoot style={{ background:"rgba(255,255,255,0.03)", fontWeight:800 }}>
+              <tr>
+                <TD style={{ textTransform:"uppercase", fontSize:11, letterSpacing:1 }}>TOTAUX</TD>
+                <TD></TD>
+                <TD>{fmt(filteredLoans.reduce((s,l)=>s+l.montant,0))}</TD>
+                <TD>{fmt(filteredLoans.reduce((s,l)=>s+l.montant*1.1,0))}</TD>
+                <TD style={{ color:C.accent }}>{fmt(filteredLoans.reduce((s,l) => s + (l.status==="actif" ? calcMontantActuel(l,tod()).montantDu : (l.montantRembourse||l.montantDu)), 0))}</TD>
+                <TD colSpan={5}></TD>
+              </tr>
+            </tfoot>
           </table>
         )}
       </Card>

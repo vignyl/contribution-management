@@ -15,6 +15,7 @@ import { Cotisations } from "./components/tabs/Cotisations";
 import { Sanctions } from "./components/tabs/Sanctions";
 import { Sorties } from "./components/tabs/Sorties";
 import { Historique } from "./components/tabs/Historique";
+import { Notes } from "./components/tabs/Notes";
 
 import { C } from "./utils";
 
@@ -53,6 +54,7 @@ const AppContent = () => {
         {tab === "sanctions" && <Sanctions />}
         {tab === "sorties" && <Sorties />}
         {tab === "historique" && <Historique />}
+        {tab === "notes" && <Notes />}
       </div>
 
       <Modals />

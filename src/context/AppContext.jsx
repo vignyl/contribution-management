@@ -26,6 +26,7 @@ export const AppProvider = ({ children }) => {
   const [sorties,     setSorties]     = useState([]);
   const [sessions,    setSessions]    = useState([]);
   const [dailyContributions, setDailyContributions] = useState([]);
+  const [notes,       setNotes]       = useState([]);
   const [modal,       setModal]       = useState(null);
   const [parentModal, setParentModal] = useState(null);
   const [form,        setForm]        = useState({});
@@ -52,11 +53,11 @@ export const AppProvider = ({ children }) => {
         try { const r = await window.storage.get(k); return r ? JSON.parse(r.value) : null; }
         catch { return null; }
       };
-      const [m,l,a,h,f,c,d,s,so,ac,se,dc] = await Promise.all([
+      const [m,l,a,h,f,c,d,s,so,ac,se,dc,nt] = await Promise.all([
         load(SK.members), load(SK.loans), load(SK.assist), load(SK.history),
         load(SK.fondsAsso), load(SK.cotisations), load(SK.dismissed),
         load(SK.sanctions), load(SK.sorties), load(SK.authCreds),
-        load(SK.sessions), load(SK.dailyContributions),
+        load(SK.sessions), load(SK.dailyContributions), load(SK.notes),
       ]);
       if (m)  setMembers(m);       if (l)  setLoans(l);        if (a)  setAssist(a);
       if (h)  setHistory(h);
@@ -64,6 +65,7 @@ export const AppProvider = ({ children }) => {
       if (s)  setSanctions(s);     if (so) setSorties(so);
       if (ac) setAuthCreds(ac);
       if (se) setSessions(se);     if (dc) setDailyContributions(dc);
+      if (nt) setNotes(nt);
       setReady(true);
     })();
   }, []);
@@ -83,13 +85,20 @@ export const AppProvider = ({ children }) => {
   useEffect(() => { if (ready) save(SK.authCreds,   authCreds);   }, [authCreds,   ready, save]);
   useEffect(() => { if (ready) save(SK.sessions,    sessions);    }, [sessions,    ready, save]);
   useEffect(() => { if (ready) save(SK.dailyContributions, dailyContributions); }, [dailyContributions, ready, save]);
+  useEffect(() => { if (ready) save(SK.notes,        notes);       }, [notes,        ready, save]);
 
   /* ── Dérivés ────────────────────────────────────────────────────────────── */
   const totFR    = useMemo(() => members.reduce((s,m) => s+m.fondsRoulement, 0), [members]);
   const totFC    = useMemo(() => members.reduce((s,m) => s+m.fondsCaisse, 0), [members]);
   const actLoans = useMemo(() => loans.filter(l => l.status==="actif"), [loans]);
   const totDette = useMemo(() => actLoans.reduce((s,l) => s + calcMontantActuel(l, tod()).montantDu, 0), [actLoans]);
-  const totGains = useMemo(() => loans.filter(l=>l.status==="rembourse").reduce((s,l)=>s+(l.interetsRembourse || l.interets),0), [loans]);
+  const totGains = useMemo(() => {
+    const rawGains = loans.filter(l=>l.status==="rembourse").reduce((s,l)=>s+(l.interetsRembourse || l.interets),0);
+    const withdrawnGains = cotisations
+      .filter(c => c.type === "roulement" && c.direction === "debit" && c.isGainWithdrawal)
+      .reduce((s, c) => s + c.montant, 0);
+    return Math.max(0, rawGains - withdrawnGains);
+  }, [loans, cotisations]);
 
   const membersX = useMemo(() => members.map(m => ({
     ...m,
@@ -100,10 +109,12 @@ export const AppProvider = ({ children }) => {
   })), [members, totFR, assist, actLoans, loans]);
 
   const fondsAsso = useMemo(() => {
-    const fromLoans = loans.filter(l => l.status==="rembourse").reduce((s,l) => s + (l.fraisAssoRembourse || 0), 0);
-    const fromSanctions = sanctions.filter(s => s.status==="payee").reduce((s,sanc) => s + sanc.montant, 0);
-    const fromSorties = sorties.filter(s => s.source==="asso").reduce((s,so) => s + so.montant, 0);
-    return fromLoans + fromSanctions - fromSorties;
+    const fromRepaidLoans  = loans.filter(l => l.status==="rembourse").reduce((s,l) => s + (l.fraisAssoRembourse || 0), 0);
+    const fromPartialPmts  = loans.filter(l => l.status==="actif").reduce((s,l) =>
+      s + (l.payments||[]).reduce((ss,p) => ss + (p.fraisAssoShare||0), 0), 0);
+    const fromSanctions    = sanctions.filter(s => s.status==="payee").reduce((s,sanc) => s + sanc.montant, 0);
+    const fromSorties      = sorties.filter(s => s.source==="asso").reduce((s,so) => s + so.montant, 0);
+    return fromRepaidLoans + fromPartialPmts + fromSanctions - fromSorties;
   }, [loans, sanctions, sorties]);
 
   /* ── Listes filtrées ── */
@@ -224,16 +235,144 @@ export const AppProvider = ({ children }) => {
   };
 
   /* ── CRUD Cotisations ───────────────────────────────────────────────────── */
+  const getMemberGains = useCallback((mbId) => {
+    return cotisations
+      .filter(c => c.memberId === mbId && c.type === "roulement" && c.direction === "credit" && c.auto)
+      .reduce((sum, c) => {
+        const loan = loans.find(l => l.id === c.loanId);
+        if (!loan) return sum;
+        const contrib = (loan.contributions || []).find(x => x.memberId === mbId);
+        const gain = Math.max(0, c.montant - (contrib?.montantContrib || 0));
+        return sum + gain;
+      }, 0);
+  }, [cotisations, loans]);
+
   const doAddCotisation = () => {
     const mid = parseInt(form.memberId), montant = parseFloat(form.montant), date = form.date||tod();
     const mb = members.find(m => m.id===mid);
     if (!mb || !form.type || !montant || montant<=0) { alert("Remplissez tous les champs."); return; }
-    const cot = { id:uid(), memberId:mid, type:form.type, montant, date, heure:new Date().toLocaleTimeString("fr-FR") };
-    setCotisations(cs => [...cs, cot]);
-    setMembers(ms => ms.map(m => m.id!==mid ? m : form.type==="caisse" ? { ...m, fondsCaisse:m.fondsCaisse+montant } : { ...m, fondsRoulement:m.fondsRoulement+montant }));
-    setHistory(h => [{ id:uid(), date, heure:new Date().toLocaleTimeString("fr-FR"), action:`Cotisation ${form.type==="caisse"?"Fonds de Caisse":"Fonds de Roulement"}`, detail:mb.name, montant }, ...h]);
+
+    const isDebit     = form.direction === "debit";
+    const isRoulement = form.type === "roulement";
+    const label       = isDebit ? (form.label?.trim() || "Retrait") : (form.label?.trim() || "");
+
+    if (isDebit) {
+      if (form.type === "caisse" && mb.fondsCaisse < montant) {
+        alert(`Solde insuffisant dans le Fonds de Caisse (Disponible: ${fmt(mb.fondsCaisse)}).`);
+        return;
+      }
+      if (!label) { alert("Le libellé du retrait est obligatoire."); return; }
+    }
+
+    // ── Calcul du montant effectif déduit ──────────────────────────────────
+    let effectiveMontant = montant;
+    let gainsDebited = 0;
+
+    if (isDebit && isRoulement) {
+      const totalCotisNet = cotisations
+        .filter(c => c.memberId === mid && c.type === "roulement" && !c.auto)
+        .reduce((s, c) => s + (c.direction === "debit" ? -c.montant : c.montant), 0);
+
+      if (form.viderRoulement) {
+        // Vider : on retire tout le Total Cotisé net (crédits - débits manuels)
+        effectiveMontant = Math.max(0, totalCotisNet);
+        // Et on retire tous les gains accumulés
+        gainsDebited = getMemberGains(mid);
+      } else {
+        // Retrait normal : on ne peut pas retirer plus que le Total Cotisé net
+        if (montant > totalCotisNet) {
+          alert(`Impossible de retirer plus que le Total Cotisé net (Disponible: ${fmt(totalCotisNet)}).`);
+          return;
+        }
+        effectiveMontant = montant;
+      }
+    }
+
+    const heure = new Date().toLocaleTimeString("fr-FR");
+    const newCots = [
+      {
+        id: uid(), memberId: mid, type: form.type,
+        montant: effectiveMontant, date, heure,
+        direction: isDebit ? "debit" : "credit",
+        label: label || undefined,
+      },
+    ];
+
+    // Si on vide et qu'il y a des gains : on ajoute une entrée auto de débit pour les gains
+    if (form.viderRoulement && gainsDebited > 0) {
+      newCots.push({
+        id: uid() + 1, memberId: mid, type: "roulement",
+        montant: gainsDebited, date, heure,
+        direction: "debit", auto: true,
+        isGainWithdrawal: true,
+        label: `Gains retirés (vidage fonds — ${label})`,
+      });
+    }
+
+    const totalWithdrawal = effectiveMontant + gainsDebited;
+    const yannickFR = mb.fondsRoulement;
+    const deficit = (isDebit && isRoulement) ? Math.max(0, totalWithdrawal - yannickFR) : 0;
+
+    setCotisations(cs => [...cs, ...newCots]);
+    setMembers(ms => {
+      const sumOthers = ms.filter(m => m.id !== mid).reduce((s, m) => s + m.fondsRoulement, 0);
+      return ms.map(m => {
+        if (m.id === mid) {
+          if (form.type === "caisse") {
+            return { ...m, fondsCaisse: isDebit ? m.fondsCaisse - effectiveMontant : m.fondsCaisse + montant };
+          } else {
+            // Pour le membre vidé/retiré : son solde disponible tombe à 0 (pas de solde négatif)
+            return { ...m, fondsRoulement: isDebit ? Math.max(0, m.fondsRoulement - totalWithdrawal) : m.fondsRoulement + montant };
+          }
+        } else {
+          // Si un déficit s'est produit lors d'un retrait (l'argent était prêté), on réduit le dispo des autres
+          if (isDebit && isRoulement && deficit > 0) {
+            const share = sumOthers > 0 ? (m.fondsRoulement / sumOthers) * deficit : 0;
+            return { ...m, fondsRoulement: Math.max(0, m.fondsRoulement - share) };
+          }
+          return m;
+        }
+      });
+    });
+
+    if (isDebit && isRoulement && form.viderRoulement) {
+      setLoans(ls => ls.map(l => {
+        if (l.status !== "actif") return l;
+        const newContribs = (l.contributions || []).map(c => {
+          if (c.memberId === mid) {
+            return { ...c, vide: true };
+          }
+          return c;
+        });
+        return { ...l, contributions: newContribs };
+      }));
+    }
+
+    const actionName = isDebit
+      ? `Retrait ${form.type === "caisse" ? "Fonds de Caisse" : "Fonds de Roulement"}${form.viderRoulement ? " (Vidé)" : ""}`
+      : `Cotisation ${form.type === "caisse" ? "Fonds de Caisse" : "Fonds de Roulement"}`;
+
+    setHistory(h => {
+      const list = [{
+        id: uid(), date, heure,
+        action: actionName,
+        detail: `${mb.name}${isDebit ? ` — ${label}` : ""}`,
+        montant: effectiveMontant + gainsDebited,
+      }];
+      if (isDebit && isRoulement && form.viderRoulement && deficit > 0) {
+        list.push({
+          id: uid() + 2, date, heure,
+          action: "Redistribution déficit (Vidage)",
+          detail: `Pris sur les autres membres (Vidage ${mb.name})`,
+          montant: -deficit,
+        });
+      }
+      return [...list, ...h];
+    });
+
     closeM();
   };
+
   const doEditCotisation = () => {
     const cotId = parseInt(form.cotisId), old = cotisations.find(c => c.id===cotId);
     if (!old) return;
@@ -241,21 +380,46 @@ export const AppProvider = ({ children }) => {
     const newM = parseFloat(form.montant), newT = form.type, newD = form.date||tod();
     if (!newT || !newM || newM<=0) return;
     const mb = members.find(m => m.id===old.memberId);
-    const dc = (newT==="caisse"?newM:0) - (old.type==="caisse"?old.montant:0);
-    const dr = (newT==="roulement"?newM:0) - (old.type==="roulement"?old.montant:0);
+    
+    const isOldDebit = old.direction === "debit";
+    const isNewDebit = form.direction === "debit";
+    const newLabel = form.label?.trim() || "";
+
+    if (isNewDebit && !newLabel) {
+      alert("Le libellé du retrait est obligatoire.");
+      return;
+    }
+
+    const oldCaisseChange = isOldDebit ? old.montant : -old.montant;
+    const oldRoulementChange = isOldDebit ? old.montant : -old.montant;
+
+    const newCaisseChange = isNewDebit ? -newM : newM;
+    const newRoulementChange = isNewDebit ? -newM : newM;
+
+    const dc = (newT === "caisse" ? newCaisseChange : 0) + (old.type === "caisse" ? oldCaisseChange : 0);
+    const dr = (newT === "roulement" ? newRoulementChange : 0) + (old.type === "roulement" ? oldRoulementChange : 0);
+
     setMembers(ms => ms.map(m => m.id===old.memberId ? { ...m, fondsCaisse:m.fondsCaisse+dc, fondsRoulement:m.fondsRoulement+dr } : m));
-    setCotisations(cs => cs.map(c => c.id===cotId ? { ...c, type:newT, montant:newM, date:newD } : c));
-    pushH("Modif. Cotisation", `${mb?.name} — ${newT} ${newM}`, newM, newD);
+    setCotisations(cs => cs.map(c => c.id===cotId ? { ...c, type:newT, montant:newM, date:newD, direction:isNewDebit?"debit":"credit", label:newLabel || undefined } : c));
+    pushH(isNewDebit ? "Modif. Retrait" : "Modif. Cotisation", `${mb?.name} — ${newT} ${newM}`, newM, newD);
     closeM();
   };
+
   const doDeleteCotisation = (cotId) => {
     const c = cotisations.find(x => x.id===cotId); if (!c) return;
     if (c.auto) { alert("Entrée auto — supprimez le prêt associé pour la retirer."); return; }
     const mb = members.find(m => m.id===c.memberId);
-    if (!window.confirm(`Supprimer ce versement de ${c.montant} ?`)) return;
-    setMembers(ms => ms.map(m => m.id!==c.memberId ? m : { ...m, fondsCaisse:c.type==="caisse"?m.fondsCaisse-c.montant:m.fondsCaisse, fondsRoulement:c.type==="roulement"?m.fondsRoulement-c.montant:m.fondsRoulement }));
+    const isDebit = c.direction === "debit";
+    if (!window.confirm(`Supprimer ce ${isDebit ? "retrait" : "versement"} de ${fmt(c.montant)} ?`)) return;
+
+    // c.montant est désormais toujours le montant effectivement déduit (plus de champ effectiveDebit)
+    setMembers(ms => ms.map(m => m.id!==c.memberId ? m : {
+      ...m,
+      fondsCaisse:    c.type==="caisse"    ? (isDebit ? m.fondsCaisse    + c.montant : m.fondsCaisse    - c.montant) : m.fondsCaisse,
+      fondsRoulement: c.type==="roulement" ? (isDebit ? m.fondsRoulement + c.montant : m.fondsRoulement - c.montant) : m.fondsRoulement,
+    }));
     setCotisations(cs => cs.filter(x => x.id!==cotId));
-    pushH("Suppression Cotisation", `${mb?.name} — ${c.type} ${c.montant}`);
+    pushH(isDebit ? "Suppression Retrait" : "Suppression Cotisation", `${mb?.name} — ${c.type} ${fmt(c.montant)}`);
   };
 
   /* ── CRUD Prêts ─────────────────────────────────────────────────────────── */
@@ -297,7 +461,16 @@ export const AppProvider = ({ children }) => {
     if (!newM || newM<=0) { alert("Montant invalide."); return; }
     const newI=newM*0.1, newFA=newM*0.02, newGM=newM*0.08, now=new Date().toLocaleTimeString("fr-FR");
     if (old.status==="actif") {
-      const restored = members.map(m => { const c=(old.contributions||[]).find(x=>x.memberId===m.id); return c ? { ...m, fondsRoulement:m.fondsRoulement+c.montantContrib } : m; });
+      const oldContribs = old.contributions || [];
+      const activeOld = oldContribs.filter(c => !c.vide);
+      const sumActiveOldMontant = activeOld.reduce((s, c) => s + c.montantContrib, 0);
+
+      const restored = members.map(m => {
+        const c = oldContribs.find(x => x.memberId === m.id);
+        if (!c || c.vide) return m;
+        const effMontant = sumActiveOldMontant > 0 ? c.montantContrib * (old.montant / sumActiveOldMontant) : c.montantContrib;
+        return { ...m, fondsRoulement: m.fondsRoulement + effMontant };
+      });
       const newContribs = calcContribs(restored, newM);
       setMembers(restored.map(m => { const c=newContribs.find(x=>x.memberId===m.id); return c ? { ...m, fondsRoulement:m.fondsRoulement-c.montantContrib } : m; }));
       const newDebits = newContribs.filter(c=>c.montantContrib>0).map((c,i) => ({ id:uid()+i, memberId:c.memberId, type:"roulement", direction:"debit", auto:true, loanId, label:"Contribution prêt (modifié)", montant:c.montantContrib, date:newDate, heure:now }));
@@ -316,7 +489,16 @@ export const AppProvider = ({ children }) => {
     const empr = members.find(m => m.id===loan.emprunteurId);
     if (!window.confirm(`Supprimer le prêt ${loan.status==="actif"?"ACTIF ⚠️":"remboursé"} de ${loan.montant} — ${empr?.name} ?`)) return;
     if (loan.status==="actif") {
-      setMembers(ms => ms.map(m => { const c=(loan.contributions||[]).find(x=>x.memberId===m.id); return c ? { ...m, fondsRoulement:m.fondsRoulement+c.montantContrib } : m; }));
+      const contribs = loan.contributions || [];
+      const activeContribs = contribs.filter(c => !c.vide);
+      const sumActiveMontant = activeContribs.reduce((s, c) => s + c.montantContrib, 0);
+
+      setMembers(ms => ms.map(m => {
+        const c = contribs.find(x => x.memberId === m.id);
+        if (!c || c.vide) return m;
+        const effMontant = sumActiveMontant > 0 ? c.montantContrib * (loan.montant / sumActiveMontant) : c.montantContrib;
+        return { ...m, fondsRoulement: m.fondsRoulement + effMontant };
+      }));
       setCotisations(cs => cs.filter(c => c.loanId!==loanId));
       setAssist(as => as.filter(a => a.loanId!==loanId));
     }
@@ -324,25 +506,104 @@ export const AppProvider = ({ children }) => {
     pushH("Suppression Prêt", `${empr?.name} — ${loan.montant}`);
   };
 
-  const doRepay = (loanId, repayDate) => {
+  const doRepay = (loanId, repayDate, montantRepay) => {
     const loan = loans.find(l => l.id===loanId); if (!loan) return;
     const date = repayDate||tod(), now = new Date().toLocaleTimeString("fr-FR");
-    const { montantDu, interets, fraisAsso, gainMbr } = calcMontantActuel(loan, date);
+    const actual = calcMontantActuel(loan, date);
+    // montantRepay is the amount being paid right now; default to full remaining balance
+    const amtToPay = (montantRepay !== undefined && montantRepay > 0)
+      ? Math.min(montantRepay, actual.montantDu)
+      : actual.montantDu;
+    const isPartial = amtToPay < actual.montantDu;
+
+    // ── Pro-rata distribution ─────────────────────────────────────────────────
+    // Use rawMontantDu for the target calculation (before any payments)
+    const { rawMontantDu, interets, fraisAsso, gainMbr } = actual;
     const contribs = loan.contributions || [];
-    if (contribs.length===0) {
-      setMembers(ms => { const t=ms.reduce((s,m)=>s+m.fondsRoulement,0); return ms.map(m => ({ ...m, fondsRoulement:m.fondsRoulement+(t>0?(m.fondsRoulement/t)*gainMbr:0) })); });
+    const prevPayments = loan.payments || [];
+
+    // Each contributor's cumulative expected return (if loan fully repaid now)
+    const activeContribs = contribs.filter(c => !c.vide);
+    const sumActiveMontant = activeContribs.reduce((s, c) => s + c.montantContrib, 0);
+    const sumActivePct    = activeContribs.reduce((s, c) => s + c.pct, 0);
+    const memberTargets = contribs.map(c => {
+      let target = 0;
+      if (!c.vide) {
+        const effM   = sumActiveMontant > 0 ? c.montantContrib * (loan.montant / sumActiveMontant) : c.montantContrib;
+        const effPct = sumActivePct    > 0 ? c.pct           * (1 / sumActivePct)                : c.pct;
+        target = effM + effPct * gainMbr;
+      }
+      return { memberId: c.memberId, target };
+    });
+    const targetAsso = fraisAsso;
+
+    // Amounts already received from prior partial payments
+    const prevAssoRcv = prevPayments.reduce((s, p) => s + (p.fraisAssoShare || 0), 0);
+    const prevMbrRcv  = {};
+    contribs.forEach(c => {
+      prevMbrRcv[c.memberId] = prevPayments.reduce((s, p) => {
+        const sh = (p.memberShares||[]).find(x => x.memberId === c.memberId);
+        return s + (sh ? sh.montant : 0);
+      }, 0);
+    });
+
+    // Remaining targets
+    const remAsso = Math.max(0, targetAsso - prevAssoRcv);
+    const remMbrs = memberTargets.map(t => ({
+      memberId: t.memberId,
+      rem: Math.max(0, t.target - (prevMbrRcv[t.memberId] || 0))
+    }));
+    const totalRem = remAsso + remMbrs.reduce((s, x) => s + x.rem, 0);
+
+    // Distribute amtToPay proportionally among remaining targets
+    const paidAsso    = totalRem > 0 ? amtToPay * (remAsso / totalRem)          : 0;
+    const paidMembers = remMbrs.map(m => ({
+      memberId: m.memberId,
+      montant: totalRem > 0 ? amtToPay * (m.rem / totalRem) : 0
+    }));
+
+    const newPayment = { id: uid(), date, heure: now, montant: amtToPay, fraisAssoShare: paidAsso, memberShares: paidMembers };
+    const updatedPayments = [...prevPayments, newPayment];
+
+    // ── Credit members ────────────────────────────────────────────────────────
+    if (contribs.length === 0) {
+      // No contributions tracked → distribute gainMbr equally to all members by fondsRoulement
+      const ratio = amtToPay / rawMontantDu;
+      setMembers(ms => { const t=ms.reduce((s,m)=>s+m.fondsRoulement,0); return ms.map(m => ({ ...m, fondsRoulement:m.fondsRoulement+(t>0?(m.fondsRoulement/t)*gainMbr*ratio:0) })); });
     } else {
-      const retours = contribs.map((c,i) => {
-        const retour = c.montantContrib + c.pct*gainMbr;
-        return { memberId:c.memberId, montant:retour, cot:{ id:uid()+i, memberId:c.memberId, type:"roulement", direction:"credit", auto:true, loanId, label:`Retour prêt + gains (${interets>0?"+"+Math.round(interets)+" FCFA d'intérêts":""})`, montant:retour, date, heure:now } };
-      });
-      setMembers(ms => ms.map(m => { const r=retours.find(x=>x.memberId===m.id); return r ? { ...m, fondsRoulement:m.fondsRoulement+r.montant } : m; }));
-      setCotisations(cs => [...cs, ...retours.map(r=>r.cot)]);
+      setMembers(ms => ms.map(m => {
+        const sh = paidMembers.find(x => x.memberId === m.id);
+        return sh && sh.montant > 0 ? { ...m, fondsRoulement: m.fondsRoulement + sh.montant } : m;
+      }));
+      const label = isPartial
+        ? `Remboursement partiel prêt (${Math.round(amtToPay)} / ${Math.round(rawMontantDu)} FCFA)`
+        : `Retour prêt + gains (${interets > 0 ? "+" + Math.round(interets) + " FCFA d'intérêts" : ""})`;
+      const newCots = paidMembers.filter(sh => sh.montant > 0).map((sh, i) => ({
+        id: uid()+i, memberId: sh.memberId, type:"roulement", direction:"credit", auto:true, loanId,
+        label, montant: sh.montant, date, heure: now
+      }));
+      setCotisations(cs => [...cs, ...newCots]);
     }
-    setLoans(ls => ls.map(l => l.id===loanId ? { ...l, status:"rembourse", dateRembours:date, montantRembourse:montantDu, interetsRembourse:interets, fraisAssoRembourse:fraisAsso } : l));
-    setAssist(as => as.filter(a => a.loanId!==loanId));
-    const empr = members.find(m => m.id===loan.emprunteurId);
-    pushH("Remboursement", `${empr?.name} — Intérêts: ${interets} | Gains mbr: ${gainMbr} | Asso: ${fraisAsso}`, montantDu, date);
+
+    // ── Update loan ───────────────────────────────────────────────────────────
+    if (isPartial) {
+      setLoans(ls => ls.map(l => l.id===loanId
+        ? { ...l, payments: updatedPayments }
+        : l
+      ));
+      const empr = members.find(m => m.id===loan.emprunteurId);
+      pushH("Paiement Partiel", `${empr?.name} — Versé: ${Math.round(amtToPay)} | Reste: ${Math.round(actual.montantDu - amtToPay)}`, amtToPay, date);
+    } else {
+      setLoans(ls => ls.map(l => l.id===loanId ? {
+        ...l, status:"rembourse", dateRembours:date,
+        montantRembourse: (l.payments||[]).reduce((s,p)=>s+p.montant,0) + amtToPay,
+        interetsRembourse: interets, fraisAssoRembourse: fraisAsso,
+        payments: updatedPayments
+      } : l));
+      setAssist(as => as.filter(a => a.loanId!==loanId));
+      const empr = members.find(m => m.id===loan.emprunteurId);
+      pushH("Remboursement", `${empr?.name} — Intérêts: ${Math.round(interets)} | Gains mbr: ${Math.round(gainMbr)} | Asso: ${Math.round(fraisAsso)}`, amtToPay, date);
+    }
     closeM();
   };
 
@@ -616,6 +877,35 @@ export const AppProvider = ({ children }) => {
     doPrint(title, body);
   };
 
+  /* ── CRUD Notes ─────────────────────────────────────────────────────────── */
+  const doAddNote = (title, content, memberIds) => {
+    if (!title.trim()) { alert("Le titre est requis."); return; }
+    const newNote = {
+      id: uid(),
+      title: title.trim(),
+      content: content.trim(),
+      date: tod(),
+      heure: new Date().toLocaleTimeString("fr-FR"),
+      memberIds: memberIds || []
+    };
+    setNotes(prev => [newNote, ...prev]);
+    pushH("Création Note", newNote.title);
+  };
+
+  const doEditNote = (id, title, content, memberIds) => {
+    if (!title.trim()) { alert("Le titre est requis."); return; }
+    setNotes(prev => prev.map(n => n.id === id ? { ...n, title: title.trim(), content: content.trim(), memberIds: memberIds || [] } : n));
+    pushH("Modification Note", title.trim());
+  };
+
+  const doDeleteNote = (id) => {
+    const note = notes.find(n => n.id === id);
+    if (!note) return;
+    if (!window.confirm(`Supprimer la note "${note.title}" ?`)) return;
+    setNotes(prev => prev.filter(n => n.id !== id));
+    pushH("Suppression Note", note.title);
+  };
+
   /* ── CRUD Sorties ───────────────────────────────────────────────────────── */
   const doAddSortie = () => {
     const montant = parseFloat(form.montant), date = form.date||tod();
@@ -652,11 +942,12 @@ export const AppProvider = ({ children }) => {
     if (!window.confirm("⚠️ Effacer TOUTES les données ? Irréversible.")) return;
     setMembers([]); setLoans([]); setAssist([]); setHistory([]); 
     setCotisations([]); setDismissed([]); setSanctions([]); setSorties([]);
+    setNotes([]);
   };
 
   /* ── Export / Import ────────────────────────────────────────────────────── */
   const doExport = () => {
-    const blob = new Blob([JSON.stringify({ _afay_version:"1.2", _exported_label:new Date().toLocaleString("fr-FR"), members, loans, assistance:assist, history, fondsAsso, cotisations, sanctions, sorties }, null, 2)], { type:"application/json" });
+    const blob = new Blob([JSON.stringify({ _afay_version:"1.2", _exported_label:new Date().toLocaleString("fr-FR"), members, loans, assistance:assist, history, fondsAsso, cotisations, sanctions, sorties, notes }, null, 2)], { type:"application/json" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `AFAY_${tod()}.json`; a.click();
     pushH("Export", `${members.length} membres`);
   };
@@ -680,6 +971,7 @@ export const AppProvider = ({ children }) => {
     setMembers(importData.members||[]); setLoans(importData.loans||[]); setAssist(importData.assistance||[]);
     setHistory(importData.history||[]); 
     setCotisations(importData.cotisations||[]); setSanctions(importData.sanctions||[]); setSorties(importData.sorties||[]);
+    setNotes(importData.notes||[]);
     pushH("Import (remplacement)", `${(importData.members||[]).length} membres`);
     setImportData(null); setImportConf([]); setImportStep(0);
   };
@@ -687,10 +979,12 @@ export const AppProvider = ({ children }) => {
     if (!importData) return;
     const exM=new Set(members.map(m=>m.id)), exL=new Set(loans.map(l=>l.id));
     const exC=new Set(cotisations.map(c=>c.id)), exA=new Set(assist.map(a=>`${a.assistantId}-${a.loanId}`));
+    const exN=new Set(notes.map(n=>n.id));
     setMembers([...members, ...(importData.members||[]).filter(m=>!exM.has(m.id))]);
     setLoans([...loans, ...(importData.loans||[]).filter(l=>!exL.has(l.id))]);
     setCotisations([...cotisations, ...(importData.cotisations||[]).filter(c=>!exC.has(c.id))]);
     setAssist([...assist, ...(importData.assistance||[]).filter(a=>!exA.has(`${a.assistantId}-${a.loanId}`))]);
+    setNotes([...notes, ...(importData.notes||[]).filter(n=>!exN.has(n.id))]);
     pushH("Import (fusion)", "membres importés");
     setImportData(null); setImportConf([]); setImportStep(0);
   };
@@ -922,7 +1216,7 @@ export const AppProvider = ({ children }) => {
     authed, loginU, loginP, loginErr, authCreds, setAuthed, setLoginU, setLoginP, setLoginErr, setAuthCreds,
     doLogin, doLogout, doChangeCredentials,
     ready, tab, setTab: setAppTab, cotisSubTab, setCotisSubTab,
-    members, loans, assist, history, fondsAsso, cotisations, dismissed, sanctions, sorties,
+    members, loans, assist, history, fondsAsso, cotisations, dismissed, sanctions, sorties, notes,
     modal, setModal, parentModal, form, setForm, sf,
     editFA, setEditFA, editFAV, setEditFAV,
     fMbr, setFMbr, fLoan, setFLoan, fSanc, setFSanc, fSancMember, setFSancMember, fCotisName, setFCotisName,
@@ -931,12 +1225,13 @@ export const AppProvider = ({ children }) => {
     filteredMembers, filteredLoans, filteredSanctions, alerts, visibleAlerts, histGrouped,
     pushH, openSub, openM, closeM, closeAll, dismissAlert,
     doAddMember, doEditMember, doDeleteMember,
-    doAddCotisation, doEditCotisation, doDeleteCotisation,
+    doAddCotisation, doEditCotisation, doDeleteCotisation, getMemberGains,
     doAddLoan, doEditLoan, doDeleteLoan, doRepay,
     doAddSanction, doEditSanction, doDeleteSanction, doPaySanction,
     sessions, dailyContributions, doAddSession, doAddDailyCotis, doDeleteDailyCotis,
     doSaveDailyMetadata, doUpdateDailyRow,
     doAddSortie, doDeleteSortie,
+    doAddNote, doEditNote, doDeleteNote,
     doClearData, doExport, onFileChange, importData, setImportData, importConf, importStep, setImportStep, doImportReplace, doImportMerge,
     prtMember, prtAllRapports, prtFilteredMembers, doPrintReceptionReport, prtLoanReport, prtAllLoanReports, prtCotisationsReport
   };

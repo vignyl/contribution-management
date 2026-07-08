@@ -11,6 +11,7 @@ const TABS = [
   {id:"sanctions",   label:"⚠️ Sanctions"},
   {id:"sorties",     label:"📤 Sorties"},
   {id:"historique",  label:"📋 Historique"},
+  {id:"notes",       label:"📝 Notes"},
 ];
 
 export const Header = () => {

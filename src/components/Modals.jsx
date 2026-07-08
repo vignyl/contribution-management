@@ -29,6 +29,7 @@ export const Modals = () => {
     doEditMember,
     doAddCotisation,
     doEditCotisation,
+    getMemberGains,
     doAddLoan,
     doEditLoan,
     doRepay,
@@ -331,92 +332,220 @@ export const Modals = () => {
 
         {/* ── Cotisation ── */}
         {(modal.type === "addCotisation" ||
-          modal.type === "editCotisation") && (
-          <div>
-            <div
-              style={{
-                fontSize: 16,
-                fontWeight: 700,
-                marginBottom: 20,
-                color: C.gold,
-              }}
-            >
-              {modal.type === "editCotisation" ? "✏️ Modifier" : "💰 Nouvelle"}{" "}
-              Cotisation
-            </div>
-            {modal.type === "addCotisation" && (
-              <div style={FR}>
-                <label style={LBL}>Membre *</label>
-                <select
-                  style={INP}
-                  value={form.memberId || ""}
-                  onChange={(e) => sf("memberId")(e.target.value)}
-                >
-                  <option value="">— Sélectionner —</option>
-                  {members.map((m) => (
-                    <option key={m.id} value={`${m.id}`}>
-                      {m.name}
-                      {m.ville ? ` (${m.ville})` : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-            <div style={FR}>
-              <label style={LBL}>Type *</label>
-              <select
-                style={INP}
-                value={form.type || ""}
-                onChange={(e) => sf("type")(e.target.value)}
-              >
-                <option value="">— Sélectionner —</option>
-                <option value="caisse">🏦 Fonds de Caisse</option>
-                <option value="roulement">🔄 Fonds de Roulement</option>
-              </select>
-            </div>
-            <div style={FR}>
-              <label style={LBL}>Montant (FCFA) *</label>
-              <input
-                style={INP}
-                type="number"
-                value={form.montant || ""}
-                onChange={(e) => sf("montant")(e.target.value)}
-                placeholder="Ex: 25 000"
-              />
-            </div>
-            <div style={FR}>
-              <label style={LBL}>Date</label>
-              <input
-                style={INP}
-                type="date"
-                value={form.date || tod()}
-                onChange={(e) => sf("date")(e.target.value)}
-              />
-            </div>
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                justifyContent: "flex-end",
-                marginTop: 18,
-              }}
-            >
-              <Btn bg={C.muted} onClick={closeM}>
-                Annuler
-              </Btn>
-              <Btn
-                bg={modal.type === "editCotisation" ? C.gold : C.accent}
-                onClick={
-                  modal.type === "editCotisation"
-                    ? doEditCotisation
-                    : doAddCotisation
+          modal.type === "editCotisation") && (() => {
+            const selectedMemberId = parseInt(form.memberId);
+            const selectedMember = members.find(m => m.id === selectedMemberId);
+            const gains = selectedMemberId ? getMemberGains(selectedMemberId) : 0;
+            const isDebit = form.direction === "debit";
+
+            const updateViderAmount = (newMemberId, newType, newVider, newInclude) => {
+              const mid   = parseInt(newMemberId !== null && newMemberId !== undefined ? newMemberId : form.memberId);
+              const t     = newType  !== null && newType  !== undefined ? newType  : form.type;
+              const vider = newVider !== null && newVider !== undefined ? newVider : form.viderRoulement;
+
+              if (vider && t === "roulement") {
+                const mb = members.find(m => m.id === mid);
+                if (mb) {
+                  // Pré-remplir avec le net des cotisations manuelles (= ce qui sera enregistré)
+                  // Les gains seront absorbés séparément via fondsRoulement = 0
+                  const totalCotisNet = cotisations
+                    .filter(c => c.memberId === mid && c.type === "roulement" && !c.auto)
+                    .reduce((s, c) => s + (c.direction === "debit" ? -c.montant : c.montant), 0);
+                  sf("montant")(Math.max(0, totalCotisNet));
+                } else {
+                  sf("montant")("");
                 }
-              >
-                ✓ {modal.type === "editCotisation" ? "Modifier" : "Enregistrer"}
-              </Btn>
-            </div>
-          </div>
-        )}
+              }
+            };
+
+            return (
+              <div>
+                <div
+                  style={{
+                    fontSize: 16,
+                    fontWeight: 700,
+                    marginBottom: 20,
+                    color: isDebit ? C.warn : C.gold,
+                  }}
+                >
+                  {isDebit 
+                    ? (modal.type === "editCotisation" ? "📤 Modifier le Retrait" : "📤 Nouveau Retrait") 
+                    : (modal.type === "editCotisation" ? "✏️ Modifier la Cotisation" : "💰 Nouvelle Cotisation")
+                  }
+                </div>
+                {modal.type === "addCotisation" && (
+                  <div style={FR}>
+                    <label style={LBL}>Membre *</label>
+                    <select
+                      style={INP}
+                      value={form.memberId || ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        sf("memberId")(val);
+                        updateViderAmount(val, null, null, null);
+                      }}
+                    >
+                      <option value="">— Sélectionner —</option>
+                      {members.map((m) => (
+                        <option key={m.id} value={`${m.id}`}>
+                          {m.name}
+                          {m.ville ? ` (${m.ville})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div style={FR}>
+                  <label style={LBL}>Type d'opération *</label>
+                  <select
+                    style={INP}
+                    value={form.direction || "credit"}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      sf("direction")(val);
+                      if (val !== "debit") {
+                        sf("viderRoulement")(false);
+                        sf("includeGains")(false);
+                      } else {
+                        updateViderAmount(null, null, null, null);
+                      }
+                    }}
+                  >
+                    <option value="credit">📥 Cotisation (Versement)</option>
+                    <option value="debit">📤 Retrait (Débit)</option>
+                  </select>
+                </div>
+                <div style={FR}>
+                  <label style={LBL}>Type *</label>
+                  <select
+                    style={INP}
+                    value={form.type || ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      sf("type")(val);
+                      updateViderAmount(null, val, null, null);
+                    }}
+                  >
+                    <option value="">— Sélectionner —</option>
+                    <option value="caisse">🏦 Fonds de Caisse</option>
+                    <option value="roulement">🔄 Fonds de Roulement</option>
+                  </select>
+                </div>
+
+                {isDebit && form.type === "roulement" && selectedMember && (() => {
+                  const totalCotisNet = cotisations
+                    .filter(c => c.memberId === selectedMemberId && c.type === "roulement" && !c.auto)
+                    .reduce((s,c) => s + (c.direction==="debit" ? -c.montant : c.montant), 0);
+                  return (
+                    <div style={{ ...FR, background: "rgba(255,255,255,0.03)", padding: 12, borderRadius: 8, border: `1px solid ${C.border}` }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+                        <input
+                          type="checkbox"
+                          checked={!!form.viderRoulement}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            sf("viderRoulement")(checked);
+                            updateViderAmount(null, null, checked, null);
+                          }}
+                        />
+                        🧹 Vider le fonds de roulement
+                      </label>
+                      {form.viderRoulement && (
+                        <div style={{ marginTop: 8, paddingLeft: 24, fontSize: 12, color: C.muted, lineHeight: 1.8 }}>
+                          <div>• Total Cotisé : <strong style={{ color: C.blue }}>{fmt(Math.max(0, totalCotisNet))}</strong> → <strong style={{ color: C.danger }}>0</strong></div>
+                          <div>• Solde disponible : <strong style={{ color: C.green }}>{fmt(selectedMember.fondsRoulement)}</strong> → <strong style={{ color: C.danger }}>0</strong></div>
+                          {gains > 0 && <div>• Dont gains prêts inclus : <strong style={{ color: C.gold }}>{fmt(gains)}</strong></div>}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {isDebit && (
+                  <div style={FR}>
+                    <label style={LBL}>Libellé du retrait *</label>
+                    <input
+                      style={INP}
+                      value={form.label || ""}
+                      onChange={(e) => sf("label")(e.target.value)}
+                      placeholder="Ex: Retrait partiel, Sortie définitive..."
+                    />
+                  </div>
+                )}
+
+                <div style={FR}>
+                  <label style={LBL}>Montant (FCFA) *</label>
+                  <input
+                    style={{
+                      ...INP,
+                      opacity: (isDebit && form.type === "roulement" && form.viderRoulement) ? 0.75 : 1,
+                      cursor:  (isDebit && form.type === "roulement" && form.viderRoulement) ? "not-allowed" : "text",
+                    }}
+                    type="number"
+                    value={form.montant || ""}
+                    onChange={(e) => sf("montant")(e.target.value)}
+                    placeholder="Ex: 25 000"
+                    readOnly={!!(isDebit && form.type === "roulement" && form.viderRoulement)}
+                  />
+                  {selectedMember && (() => {
+                    const totalCotisNet = cotisations
+                      .filter(c => c.memberId === selectedMemberId && c.type === "roulement" && !c.auto)
+                      .reduce((s, c) => s + (c.direction === "debit" ? -c.montant : c.montant), 0);
+                    return (
+                      <div style={{ fontSize: 11, color: C.muted, marginTop: 6, lineHeight: 1.7 }}>
+                        {form.type === "roulement" ? (
+                          <>
+                            <span>Total Cotisé (net) : <strong style={{ color: C.blue }}>{fmt(Math.max(0, totalCotisNet))}</strong></span>
+                            <span style={{ margin: "0 6px" }}>·</span>
+                            <span>Disponible : <strong style={{ color: C.green }}>{fmt(selectedMember.fondsRoulement)}</strong></span>
+                            {gains > 0 && <><span style={{ margin: "0 6px" }}>·</span><span>Gains prêts : <strong style={{ color: C.gold }}>{fmt(gains)}</strong></span></>}
+                            {form.viderRoulement && (
+                              <div style={{ marginTop: 4, color: C.warn, fontWeight: 700 }}>
+                                ⚠️ Après validation : Total Cotisé = 0 et Solde Disponible = 0.
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <span>Disponible : <strong>{fmt(selectedMember.fondsCaisse)}</strong></span>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+                <div style={FR}>
+                  <label style={LBL}>Date</label>
+                  <input
+                    style={INP}
+                    type="date"
+                    value={form.date || tod()}
+                    onChange={(e) => sf("date")(e.target.value)}
+                  />
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    justifyContent: "flex-end",
+                    marginTop: 18,
+                  }}
+                >
+                  <Btn bg={C.muted} onClick={closeM}>
+                    Annuler
+                  </Btn>
+                  <Btn
+                    bg={modal.type === "editCotisation" ? C.gold : isDebit ? C.warn : C.accent}
+                    onClick={
+                      modal.type === "editCotisation"
+                        ? doEditCotisation
+                        : doAddCotisation
+                    }
+                  >
+                    ✓ {modal.type === "editCotisation" ? "Modifier" : "Enregistrer"}
+                  </Btn>
+                </div>
+              </div>
+            );
+          })()}
 
         {/* ── Nouveau prêt ── */}
         {modal.type === "addLoan" && (
@@ -903,19 +1032,60 @@ export const Modals = () => {
                     </div>
                   )}
                 </div>
-                <div
-                  style={{
-                    display: "flex",
-                    gap: 8,
-                    justifyContent: "flex-end",
-                    marginTop: 4,
-                  }}
-                >
-                  <Btn bg={C.muted} onClick={closeM}>
-                    Annuler
-                  </Btn>
-                  <Btn bg={C.green} onClick={() => doRepay(loan.id, repDate)}>
-                    ✓ Confirmer le remboursement
+                {/* ── Type de paiement ── */}
+                <div style={{ marginTop: 16, padding: "14px 16px", background: "rgba(255,255,255,0.03)", borderRadius: 10, border: `1px solid ${C.border}` }}>
+                  <div style={LBL}>Type de paiement</div>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                    {["total", "partiel"].map(t => (
+                      <button key={t} onClick={() => sf("repayType")(t)}
+                        style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: `1px solid ${form.repayType === t ? C.accent : C.border}`,
+                          background: form.repayType === t ? `${C.accent}22` : "transparent",
+                          color: form.repayType === t ? C.accent : C.muted, fontWeight: 700, fontSize: 12, cursor: "pointer" }}>
+                        {t === "total" ? "✅ Remboursement Total" : "⏳ Paiement Partiel"}
+                      </button>
+                    ))}
+                  </div>
+                  {form.repayType === "partiel" && (
+                    <div>
+                      <label style={LBL}>💵 Montant versé (FCFA)</label>
+                      <input style={INP} type="number" min={1} max={actual.montantDu}
+                        value={form.repayAmount || ""}
+                        onChange={e => sf("repayAmount")(e.target.value)}
+                        placeholder={`Max: ${Math.round(actual.montantDu)}`} />
+                      {form.repayAmount > 0 && parseFloat(form.repayAmount) < actual.montantDu && (
+                        <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between",
+                          padding: "8px 12px", background: `${C.warn}15`, borderRadius: 8, border: `1px solid ${C.warn}40` }}>
+                          <span style={{ fontSize: 12, color: C.muted }}>Solde restant après ce versement :</span>
+                          <span style={{ fontWeight: 800, color: C.warn, fontSize: 14 }}>
+                            {fmt(actual.montantDu - parseFloat(form.repayAmount || 0))}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {/* Affichage des paiements partiels déjà effectués */}
+                  {(loan.payments||[]).length > 0 && (
+                    <div style={{ marginTop: 12, borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
+                      <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>Versements déjà effectués :</div>
+                      {(loan.payments||[]).map((p, i) => (
+                        <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.muted, marginBottom: 3 }}>
+                          <span>{p.date}</span>
+                          <span style={{ fontWeight: 700, color: C.green }}>+{fmt(p.montant)}</span>
+                        </div>
+                      ))}
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 700, marginTop: 6, borderTop: `1px solid ${C.border}`, paddingTop: 6 }}>
+                        <span>Total versé</span>
+                        <span style={{ color: C.green }}>{fmt((loan.payments||[]).reduce((s,p)=>s+p.montant,0))}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+                  <Btn bg={C.muted} onClick={closeM}>Annuler</Btn>
+                  <Btn bg={C.green}
+                    onClick={() => doRepay(loan.id, repDate, form.repayType === "partiel" ? parseFloat(form.repayAmount||0) : undefined)}
+                    disabled={form.repayType === "partiel" && (!form.repayAmount || parseFloat(form.repayAmount) <= 0)}>
+                    {form.repayType === "partiel" ? "⏳ Enregistrer le versement" : "✓ Confirmer le remboursement"}
                   </Btn>
                 </div>
               </div>

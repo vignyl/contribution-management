@@ -23,15 +23,17 @@ export const uid    = () => Date.now() + Math.floor(Math.random()*9999);
 export const SEUIL  = 40000;
 
 export const calcMontantActuel = (loan, dateStr) => {
-  const start   = new Date(loan.date);
-  const end     = new Date(dateStr || tod());
-  const days    = Math.max(0, Math.round((end - start) / 864e5));
-  const periods = Math.floor(days / 90) + 1;
-  const montantDu  = loan.montant * Math.pow(1.1, periods);
-  const interets   = montantDu - loan.montant;
+  const start      = new Date(loan.date);
+  const end        = new Date(dateStr || tod());
+  const days       = Math.max(0, Math.round((end - start) / 864e5));
+  const periods    = Math.floor(days / 90) + 1;
+  const rawMontantDu = loan.montant * Math.pow(1.1, periods);
+  const interets   = rawMontantDu - loan.montant;
   const fraisAsso  = interets * 0.2;
   const gainMbr    = interets * 0.8;
-  return { montantDu, interets, fraisAsso, gainMbr, periods };
+  const totalPayments = (loan.payments || []).reduce((s, p) => s + p.montant, 0);
+  const montantDu  = Math.max(0, rawMontantDu - totalPayments);
+  return { montantDu, rawMontantDu, interets, fraisAsso, gainMbr, periods, totalPayments };
 };
 
 export const sha1 = (str) => {
@@ -115,6 +117,7 @@ export const SK = {
   sanctions:"afay:sanctions", sorties:"afay:sorties",
   authCreds:"afay:authCreds",
   sessions:"afay:sessions", dailyContributions:"afay:dailyContributions",
+  notes:"afay:notes",
 };
 
 export const DEFAULT_USER = "afay-username";

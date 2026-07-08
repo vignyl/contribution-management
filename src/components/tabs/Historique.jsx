@@ -35,7 +35,7 @@ export const Historique = () => {
                     <tr key={h.id}>
                       <TD s={{ color:C.muted, fontSize:11, whiteSpace:"nowrap" }}>{h.date}<div style={{ fontSize:10 }}>{h.heure||"—"}</div></TD>
                       <TD>{h.detail}</TD>
-                      <TD><span style={{ fontWeight:700, color:h.montant>0?C.gold:C.muted }}>{h.montant>0?fmt(h.montant):"—"}</span></TD>
+                      <TD><span style={{ fontWeight:700, color:h.montant !== 0 ? (h.montant > 0 ? C.gold : C.danger) : C.muted }}>{h.montant !== 0 ? (h.montant > 0 ? "" : "- ") + fmt(Math.abs(h.montant)) : "—"}</span></TD>
                     </tr>
                   ))}</tbody>
                 </table>
@@ -51,7 +51,7 @@ export const Historique = () => {
                   <TD s={{ color:C.muted, fontSize:12, whiteSpace:"nowrap" }}>{h.date}<div style={{ fontSize:10 }}>{h.heure||"—"}</div></TD>
                   <TD><Badge color={C.blue}>{h.action}</Badge></TD>
                   <TD>{h.detail}</TD>
-                  <TD><span style={{ fontWeight:700, color:h.montant>0?C.gold:C.muted }}>{h.montant>0?fmt(h.montant):"—"}</span></TD>
+                  <TD><span style={{ fontWeight:700, color:h.montant !== 0 ? (h.montant > 0 ? C.gold : C.danger) : C.muted }}>{h.montant !== 0 ? (h.montant > 0 ? "" : "- ") + fmt(Math.abs(h.montant)) : "—"}</span></TD>
                 </tr>
               ))}</tbody>
             </table>
